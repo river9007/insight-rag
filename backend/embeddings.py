@@ -1,18 +1,18 @@
 # Archivo: backend/embeddings.py
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
-# Cargamos el modelo. 
-# La primera vez que ejecutes esto, descargará los pesos del modelo desde HuggingFace (unos ~80MB).
-MODEL_NAME = "all-MiniLM-L6-v2"
-print(f"Cargando modelo de embeddings: {MODEL_NAME}...")
-model = SentenceTransformer(MODEL_NAME)
-print("Modelo cargado correctamente.")
+# Usamos el mismo modelo pero desde el catálogo optimizado de fastembed
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+print(f"Cargando modelo de embeddings ligero: {MODEL_NAME}...")
+
+# Inicializa el modelo usando ONNX Runtime (consume muy poca memoria RAM)
+model = TextEmbedding(model_name=MODEL_NAME)
+print("Modelo ligero cargado correctamente.")
 
 def get_embedding(text: str) -> list[float]:
     """
     Toma un texto y devuelve su representación vectorial (384 dimensiones).
     """
-    # encode() devuelve un array de numpy, lo convertimos a lista de Python puro
-    # porque pgvector de SQLAlchemy espera una lista estándar.
-    vector = model.encode(text)
-    return vector.tolist()
+    # fastembed procesa en lotes y devuelve un iterador; extraemos el primer vector
+    embeddings = list(model.embed([text]))
+    return embeddings[0].tolist()
