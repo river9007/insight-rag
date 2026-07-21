@@ -15,8 +15,9 @@ if not DATABASE_URL:
 # Crear el motor asíncrono
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True, # Imprime el SQL en la consola (útil para debug ahora en desarrollo)
-    future=True
+    echo=True, # Imprime el SQL en la consola
+    future=True,
+    connect_args={"prepared_statement_cache_size": 0}  # <--- FIX PARA SUPABASE PGBOUNCER
 )
 
 # Fábrica de sesiones asíncronas
