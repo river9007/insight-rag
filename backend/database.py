@@ -11,14 +11,13 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("La variable DATABASE_URL no está configurada en el archivo .env")
 
-# Crear el motor asíncrono con la caché de prepared statements desactivada
+# Crear el motor asíncrono corrigiendo los argumentos
 engine = create_async_engine(
     DATABASE_URL,
     echo=True,
     future=True,
-    prepared_statement_cache_size=0,  # <-- Apaga la caché en SQLAlchemy
     connect_args={
-        "statement_cache_size": 0     # <-- Apaga la caché en asyncpg (vital para Supabase Pooler)
+        "statement_cache_size": 0  # Desactiva la caché en asyncpg para el pooler de Supabase
     }
 )
 
