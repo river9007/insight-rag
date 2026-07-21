@@ -20,7 +20,7 @@ export default function Dashboard() {
     setAnswer(""); // Limpiamos la respuesta anterior
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/analyze/stream', {
+      const response = await fetch('https://insight-rag-backend.onrender.com/analyze/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: query, limit: 5 }),
