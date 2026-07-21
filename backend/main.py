@@ -28,7 +28,10 @@ app = FastAPI(title="InsightRAG API", lifespan=lifespan)
 # NUEVO: Configuración CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], # Permitimos que nuestro frontend de Next.js se conecte
+    allow_origins=[
+        "http://localhost:3000",
+        "https://insight-rag-ten.vercel.app"  # <-- Tu dominio de Vercel
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
