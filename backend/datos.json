@@ -1,1 +1,14 @@
-{"query": "buena calidad precio", "limit": 3}
+{
+  "query": "Resume tu respuesta anterior en una sola frase corta.",
+  "history": [
+    {
+      "role": "user",
+      "content": "¿Qué opinan de la batería de este producto?"
+    },
+    {
+      "role": "assistant",
+      "content": "Basado en las reseñas, los usuarios consideran que la batería es de excelente calidad, destacando que dura más de 24 horas continuas y carga de forma muy rápida, lo que la hace ideal para viajes."
+    }
+  ],
+  "limit": 2
+}

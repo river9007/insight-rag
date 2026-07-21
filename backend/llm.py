@@ -2,43 +2,51 @@
 import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-from langchain_core.prompts import PromptTemplate # <- Corregido aquí
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 load_dotenv()
 
 # Inicializamos la conexión con Groq usando el modelo Llama 3 Open Source
-# El modelo exacto puede variar en Groq, "llama3-8b-8192" es su identificador estándar actual
 llm = ChatGroq(
     groq_api_key=os.getenv("GROQ_API_KEY"),
     model_name="llama-3.1-8b-instant", 
     temperature=0
 )
 
-prompt_template = PromptTemplate(
-    input_variables=["context", "question"],
-    template="""Actúa como un Senior Product Manager analizando feedback de clientes.
-    Usa EXCLUSIVAMENTE el siguiente contexto de reseñas para responder a la pregunta.
-    Si el contexto no contiene información suficiente, responde que no hay datos para llegar a una conclusión.
-    No inventes información.
+# El nuevo ChatPromptTemplate entiende de roles y variables dinámicas de memoria
+prompt_template = ChatPromptTemplate.from_messages([
+    ("system", """Eres un asistente analítico experto.
 
-    Contexto de Reseñas:
-    {context}
+<contexto_de_base_de_datos>
+{context}
+</contexto_de_base_de_datos>
 
-    Pregunta del analista:
-    {question}
-
-    Resumen Estructurado:"""
-)
+INSTRUCCIONES ESTRICTAS:
+1. Revisa el historial de la conversación.
+2. Si el usuario te pide resumir, aclarar, o hace referencia a un tema que YA se respondió en los mensajes anteriores, responde basándote EXCLUSIVAMENTE en el historial. En ese caso, IGNORA por completo el <contexto_de_base_de_datos> porque contendrá información irrelevante.
+3. Si el usuario hace una pregunta totalmente nueva, usa el <contexto_de_base_de_datos>.
+"""),
+    MessagesPlaceholder(variable_name="chat_history"), 
+    ("human", "{question}")
+])
 
 rag_chain = prompt_template | llm
 
-async def generate_insight(context: str, question: str) -> str:
-    # ChatGroq devuelve un objeto AIMessage, por lo que extraemos el .content
-    response = await rag_chain.ainvoke({"context": context, "question": question})
+async def generate_insight(context: str, question: str, chat_history: list = []) -> str:
+    # Ahora pasamos también el chat_history
+    response = await rag_chain.ainvoke({
+        "context": context, 
+        "chat_history": chat_history,
+        "question": question
+    })
     return response.content
 
-async def stream_insight(context: str, question: str):
-    # astream() funciona exactamente igual, pero extraemos el contenido del chunk
-    async for chunk in rag_chain.astream({"context": context, "question": question}):
+async def stream_insight(context: str, question: str, chat_history: list = []):
+    # astream() funciona igual, pero recibe el chat_history
+    async for chunk in rag_chain.astream({
+        "context": context, 
+        "chat_history": chat_history,
+        "question": question
+    }):
         if chunk.content:
             yield chunk.content

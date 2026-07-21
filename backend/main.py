@@ -1,6 +1,7 @@
 # Archivo: backend/main.py
+from typing import List, Optional
 from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware # NUEVO IMPORT
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,11 +10,8 @@ from database import engine, Base, get_db
 import models
 from embeddings import get_embedding
 from fastapi.responses import StreamingResponse
-# Importaciones limpias de llm.py (sin duplicados)
 from llm import generate_insight, stream_insight
-
-# Si get_embedding es síncrona, descomenta la siguiente línea:
-# from fastapi.concurrency import run_in_threadpool
+from langchain_core.messages import HumanMessage, AIMessage
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,7 +23,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="InsightRAG API", lifespan=lifespan)
 
-# NUEVO: Configuración CORS
+# Configuración CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -37,13 +35,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Modelos Pydantic para validación de peticiones
+# 1. Definimos la estructura de un mensaje individual en el historial
+class Message(BaseModel):
+    role: str      # Será "user" o "assistant"
+    content: str   # El texto del mensaje
+
 class SearchRequest(BaseModel):
     query: str
     limit: int = 3
 
+# 2. Actualizamos nuestro modelo principal para recibir el historial
 class AnalyzeRequest(BaseModel):
     query: str
+    history: List[Message] = []  # <-- Nuevo: Historial opcional (por defecto vacío)
     limit: int = 5
 
 @app.get("/")
@@ -98,7 +102,15 @@ async def analyze_reviews(request: AnalyzeRequest, db: AsyncSession = Depends(ge
         for r in reviews
     ])
     
-    insight = await generate_insight(context=context_text, question=request.query)
+    # Traducir el historial de Pydantic a clases de LangChain
+    langchain_history = []
+    for msg in request.history:
+        if msg.role == "user":
+            langchain_history.append(HumanMessage(content=msg.content))
+        elif msg.role == "assistant":
+            langchain_history.append(AIMessage(content=msg.content))
+    
+    insight = await generate_insight(context=context_text, question=request.query, chat_history=langchain_history)
     
     return {
         "query": request.query,
@@ -109,7 +121,7 @@ async def analyze_reviews(request: AnalyzeRequest, db: AsyncSession = Depends(ge
 # 3. ENDPOINT: Streaming de Análisis (Token a Token)
 @app.post("/analyze/stream")
 async def analyze_reviews_stream(request: AnalyzeRequest, db: AsyncSession = Depends(get_db)):
-    print(f"Streaming de análisis para: '{request.query}'")
+    print(f"Streaming de análisis para: '{request.query}' con {len(request.history)} mensajes previos.")
     
     # 1. Recuperación de contexto de la BD
     query_vector = get_embedding(request.query)
@@ -127,10 +139,18 @@ async def analyze_reviews_stream(request: AnalyzeRequest, db: AsyncSession = Dep
         for r in reviews
     ])
     
-    # 3. Función generadora que consume el 'async for' de tu llm.py
+    # 3. Traducir el historial de Pydantic a clases de LangChain
+    langchain_history = []
+    for msg in request.history:
+        if msg.role == "user":
+            langchain_history.append(HumanMessage(content=msg.content))
+        elif msg.role == "assistant":
+            langchain_history.append(AIMessage(content=msg.content))
+    
+    # 4. Función generadora
     async def event_generator():
-        async for chunk in stream_insight(context=context_text, question=request.query):
+        async for chunk in stream_insight(context=context_text, question=request.query, chat_history=langchain_history):
             yield str(chunk)
 
-    # 4. Devolvemos la respuesta manteniendo la conexión HTTP abierta
+    # 5. Devolvemos la respuesta manteniendo la conexión HTTP abierta
     return StreamingResponse(event_generator(), media_type="text/plain")
