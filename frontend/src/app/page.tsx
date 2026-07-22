@@ -5,41 +5,65 @@ import { useState } from 'react';
 import { Search, BarChart3, MessageSquare, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import MetricsPanel from '../components/MetricsPanel';
+import DocumentUploader from '../components/DocumentUploader';
 
 export default function Dashboard() {
   // Estados para manejar el chat
   const [query, setQuery] = useState("");
   const [answer, setAnswer] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  
+  // Estado para guardar la memoria de la conversación
+  const [chatHistory, setChatHistory] = useState<{role: string, content: string}[]>([]);
 
   // Función que se conecta a FastAPI y procesa el streaming
   const handleSearch = async () => {
     if (!query.trim()) return;
     
     setIsLoading(true);
-    setAnswer(""); // Limpiamos la respuesta anterior
+    setAnswer(""); // Limpiamos la respuesta anterior para el efecto de streaming
 
     try {
-      const response = await fetch('https://insight-rag-backend.onrender.com/analyze/stream', {
+      // Uso de variable de entorno con fallback a localhost
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      
+      const response = await fetch(`${API_URL}/analyze/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: query, limit: 5 }),
+        body: JSON.stringify({ 
+          query: query, 
+          history: chatHistory, 
+          limit: 5 
+        }),
       });
 
       if (!response.body) throw new Error("No hay body en la respuesta");
 
-      // API nativa del navegador para leer streams (Server-Sent Events)
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
+      let done = false;
+      let fullResponse = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      while (!done) {
+        const { done: readerDone, value } = await reader.read();
+        done = readerDone;
         
-        // Decodificamos el pedazo de texto (chunk) y lo añadimos al estado
-        const chunk = decoder.decode(value, { stream: true });
-        setAnswer((prev) => prev + chunk);
+        if (value) {
+          const chunk = decoder.decode(value, { stream: true });
+          fullResponse += chunk;
+          setAnswer((prev) => prev + chunk);
+        }
       }
+
+      setChatHistory(prev => [
+        ...prev, 
+        { role: 'user', content: query },
+        { role: 'assistant', content: fullResponse }
+      ]);
+
+      setAnswer('');
+      setQuery('');
+
     } catch (error) {
       console.error("Error en la conexión:", error);
       setAnswer("❌ Ocurrió un error al conectar con el backend.");
@@ -71,34 +95,52 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Panel del Chat RAG */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 flex flex-col h-[500px]">
+        {/* Panel del Chat RAG e Ingesta */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 flex flex-col h-[700px]">
           <h2 className="text-xl font-semibold mb-4 border-b border-gray-100 pb-2 flex items-center gap-2">
             <MessageSquare size={20} className="text-blue-600" />
             Asistente IA
           </h2>
+
+          {/* Componente de Subida de Archivos */}
+          <div className="mb-4">
+            <DocumentUploader />
+          </div>
           
-          <div className="flex-1 bg-slate-50 rounded-lg p-4 mb-4 overflow-y-auto border border-gray-100">
-            {/* Si no hay respuesta ni está cargando, mostramos texto de ayuda */}
-            {!answer && !isLoading && (
+          {/* Historial de conversación */}
+          <div className="flex-1 bg-slate-50 rounded-lg p-4 mb-4 overflow-y-auto border border-gray-100 flex flex-col gap-4">
+            
+            {chatHistory.length === 0 && !answer && !isLoading && (
               <p className="text-gray-400 text-sm text-center mt-10">
-                Hazme una pregunta sobre las reseñas del producto PROD-001...
+                Sube un documento en PDF o hazme una pregunta sobre las reseñas del producto...
               </p>
             )}
-            
-            {/* Aquí renderizamos el Markdown en HTML usando la librería */}
-            <div className="prose prose-sm prose-blue">
-              <ReactMarkdown>{answer}</ReactMarkdown>
-            </div>
-            
-            {/* Spinner si está procesando el primer token */}
-            {isLoading && !answer && (
-              <div className="flex justify-center mt-4">
-                <Loader2 className="animate-spin text-blue-500" />
+
+            {chatHistory.map((msg, idx) => (
+              <div key={idx} className={`p-4 rounded-lg ${msg.role === 'user' ? 'bg-indigo-50 border border-indigo-100 ml-4' : 'bg-white border border-slate-200 shadow-sm mr-4'}`}>
+                <span className={`text-xs font-bold uppercase mb-2 block ${msg.role === 'user' ? 'text-indigo-600' : 'text-blue-600'}`}>
+                  {msg.role === 'user' ? 'Tú' : 'IA'}
+                </span>
+                <div className="prose prose-sm prose-slate max-w-none">
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                </div>
+              </div>
+            ))}
+
+            {(answer || isLoading) && (
+              <div className="p-4 rounded-lg bg-white border border-blue-200 shadow-sm mr-4">
+                <span className="text-xs font-bold uppercase text-blue-600 mb-2 flex items-center gap-2">
+                  IA Analizando... {isLoading && !answer && <Loader2 size={14} className="animate-spin text-blue-500" />}
+                </span>
+                <div className="prose prose-sm prose-slate max-w-none">
+                  <ReactMarkdown>{answer}</ReactMarkdown>
+                </div>
               </div>
             )}
+            
           </div>
 
+          {/* Caja de entrada para consultas */}
           <div className="relative mt-auto">
             <input 
               type="text" 
