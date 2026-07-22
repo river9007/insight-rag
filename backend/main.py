@@ -1,4 +1,3 @@
-# Archivo: backend/main.py
 import io
 import asyncio  # <-- Importado para ejecutar tareas síncronas en hilos
 from typing import List, Optional
@@ -7,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field  # <-- Importamos Field aquí
 from database import engine, Base, get_db
 import models
 from embeddings import get_embedding
@@ -28,7 +27,17 @@ async def lifespan(app: FastAPI):
     yield
     print("Apagando aplicación...")
 
-app = FastAPI(title="InsightRAG API", lifespan=lifespan)
+# Inicialización de FastAPI con metadatos para la documentación Swagger
+app = FastAPI(
+    title="InsightRAG 🚀",
+    description="API de búsqueda semántica y análisis de reseñas de productos usando pgvector y Llama 3.",
+    version="1.0.0",
+    contact={
+        "name": "Tu Nombre",
+        "email": "tu@email.com",
+    },
+    lifespan=lifespan
+)
 
 # Configuración CORS
 app.add_middleware(
@@ -47,15 +56,15 @@ class Message(BaseModel):
     role: str      # Será "user" o "assistant"
     content: str   # El texto del mensaje
 
+# Modelos Pydantic con descripciones para el Swagger
 class SearchRequest(BaseModel):
-    query: str
-    limit: int = 3
+    query: str = Field(..., description="Texto o concepto a buscar en la base de datos de conocimiento")
+    limit: int = Field(default=3, description="Número máximo de fragmentos a recuperar")
 
-# 2. Actualizamos nuestro modelo principal para recibir el historial
 class AnalyzeRequest(BaseModel):
-    query: str
-    history: List[Message] = []  # <-- Historial opcional (por defecto vacío)
-    limit: int = 5
+    query: str = Field(..., description="La pregunta que quieres que Llama 3 responda basándose en el contexto")
+    history: List[Message] = Field(default=[], description="Historial de la conversación para mantener el contexto")
+    limit: int = Field(default=5, description="Número de documentos a extraer de la base vectorial")
 
 @app.get("/")
 async def root():
