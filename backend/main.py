@@ -1,6 +1,8 @@
 # Archivo: backend/main.py
+import io
+import asyncio  # <-- Importado para ejecutar tareas síncronas en hilos
 from typing import List, Optional
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,11 @@ from embeddings import get_embedding
 from fastapi.responses import StreamingResponse
 from llm import generate_insight, stream_insight
 from langchain_core.messages import HumanMessage, AIMessage
+
+# Importaciones para procesamiento de PDFs y Chunking
+import pypdf
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -47,7 +54,7 @@ class SearchRequest(BaseModel):
 # 2. Actualizamos nuestro modelo principal para recibir el historial
 class AnalyzeRequest(BaseModel):
     query: str
-    history: List[Message] = []  # <-- Nuevo: Historial opcional (por defecto vacío)
+    history: List[Message] = []  # <-- Historial opcional (por defecto vacío)
     limit: int = 5
 
 @app.get("/")
@@ -154,3 +161,66 @@ async def analyze_reviews_stream(request: AnalyzeRequest, db: AsyncSession = Dep
 
     # 5. Devolvemos la respuesta manteniendo la conexión HTTP abierta
     return StreamingResponse(event_generator(), media_type="text/plain")
+
+# 4. ENDPOINT: Ingesta de Documentos PDF
+@app.post("/ingest")
+async def ingest_document(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    # 1. Validar extensión del archivo
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Por ahora, solo soportamos archivos PDF.")
+
+    try:
+        # 2. Leer el archivo en memoria
+        file_content = await file.read()
+        pdf_reader = pypdf.PdfReader(io.BytesIO(file_content))
+        
+        # 3. Extraer texto
+        extracted_text = ""
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+            if text:
+                extracted_text += text + "\n"
+            
+        if not extracted_text.strip():
+            raise HTTPException(status_code=400, detail="El PDF está vacío o no se pudo extraer el texto.")
+
+        # 4. Crear documento y aplicar Chunking
+        doc = Document(
+            page_content=extracted_text, 
+            metadata={"source": file.filename}
+        )
+        
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200
+        )
+        chunks = text_splitter.split_documents([doc])
+        
+        # 5. Generar embeddings e insertar en la base de datos vía SQLAlchemy
+        new_reviews = []
+        for chunk in chunks:
+            # SOLUCIÓN: Ejecutar get_embedding en un hilo secundario para no bloquear el event loop de la BD
+            vector = await asyncio.to_thread(get_embedding, chunk.page_content)
+            
+            # Instanciamos el registro según tu modelo Review
+            review_entry = models.Review(
+                product_id=file.filename,  # Guardamos el nombre del archivo como identificador
+                rating=5,                  # Valor por defecto
+                review_text=chunk.page_content,
+                embedding=vector
+            )
+            new_reviews.append(review_entry)
+        
+        db.add_all(new_reviews)
+        await db.commit()
+        
+        return {
+            "status": "success", 
+            "message": f"Archivo '{file.filename}' procesado exitosamente.",
+            "chunks_creados": len(chunks)
+        }
+        
+    except Exception as e:
+        print(f"Error en la ingesta: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
