@@ -1,19 +1,21 @@
-# Archivo: backend/embeddings.py
-from fastembed import TextEmbedding
+import os
+import google.generativeai as genai
 
-# Fastembed soporta nativamente el mismo modelo que usábamos antes
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-print(f"Cargando modelo FastEmbed: {MODEL_NAME}...")
-
-# Iniciamos el modelo de forma ligera
-model = TextEmbedding(model_name=MODEL_NAME)
-print("Modelo cargado correctamente.")
+# 1. Configurar el cliente usando GEMINI_API_KEY (la que pondremos en Render)
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 def get_embedding(text: str) -> list[float]:
     """
-    Convierte un texto en un vector usando FastEmbed.
+    Toma un texto y devuelve su vector de embedding usando Gemini de forma ligera.
     """
-    # model.embed() devuelve un iterador/generador, lo convertimos a lista
-    # y tomamos el primer (y único) vector de la consulta.
-    vector_array = list(model.embed([text]))[0]
-    return vector_array.tolist()
+    try:
+        # 2. Llamada a la API de embeddings de Google
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=text,
+            task_type="retrieval_document", 
+        )
+        return result['embedding']
+    except Exception as e:
+        print(f"Error al generar embedding con Gemini: {e}")
+        return []

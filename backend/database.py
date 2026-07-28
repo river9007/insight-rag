@@ -11,13 +11,23 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("La variable DATABASE_URL no está configurada en el archivo .env")
 
-# Crear el motor asíncrono corrigiendo los argumentos
+# 🛡️ PROTECCIÓN CRÍTICA: Asegurar que SQLAlchemy use el driver asíncrono
+# Supabase da la URL como 'postgresql://' o 'postgres://', pero create_async_engine exige 'postgresql+asyncpg://'
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+# Determinar si estamos en desarrollo para los logs
+is_development = os.getenv("ENVIRONMENT") == "development"
+
+# Crear el motor asíncrono blindado
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True,
+    echo=is_development, # Falso en producción para no saturar los logs
     future=True,
     connect_args={
-        "statement_cache_size": 0  # Desactiva la caché en asyncpg para el pooler de Supabase
+        "statement_cache_size": 0, # Vital para el pooler de Supabase (puerto 6543)
     }
 )
 
@@ -32,4 +42,7 @@ Base = declarative_base()
 
 async def get_db():
     async with AsyncSessionLocal() as session:
-        yield session
+        try:
+            yield session
+        finally:
+            await session.close() # Buena práctica: asegurar el cierre de sesión siempre

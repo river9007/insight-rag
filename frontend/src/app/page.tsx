@@ -6,48 +6,50 @@ import { Search, BarChart3, MessageSquare, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import MetricsPanel from '../components/MetricsPanel';
 import DocumentUploader from '../components/DocumentUploader';
+import { supabase } from '../lib/supabaseClient';
 
 export default function Dashboard() {
-  // Estados para manejar el chat
-  const [query, setQuery] = useState("");
-  const [answer, setAnswer] = useState("");
+  const [query, setQuery] = useState('');
+  const [answer, setAnswer] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  
-  // Estado para guardar la memoria de la conversación
-  const [chatHistory, setChatHistory] = useState<{role: string, content: string}[]>([]);
+  const [chatHistory, setChatHistory] = useState<{ role: string; content: string }[]>([]);
 
-  // Función que se conecta a FastAPI y procesa el streaming
   const handleSearch = async () => {
     if (!query.trim()) return;
-    
+
     setIsLoading(true);
-    setAnswer(""); // Limpiamos la respuesta anterior para el efecto de streaming
+    setAnswer('');
 
     try {
-      // Uso de variable de entorno con fallback a localhost
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      
+
+      // Auth Supabase — conservado del dashboard actual
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const response = await fetch(`${API_URL}/analyze/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          query: query, 
-          history: chatHistory, 
-          limit: 5 
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          query,
+          history: chatHistory,
+          limit: 5,
         }),
       });
 
-      if (!response.body) throw new Error("No hay body en la respuesta");
+      if (!response.body) throw new Error('No hay body en la respuesta');
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
+      const decoder = new TextDecoder('utf-8');
       let done = false;
       let fullResponse = '';
 
       while (!done) {
         const { done: readerDone, value } = await reader.read();
         done = readerDone;
-        
         if (value) {
           const chunk = decoder.decode(value, { stream: true });
           fullResponse += chunk;
@@ -55,18 +57,17 @@ export default function Dashboard() {
         }
       }
 
-      setChatHistory(prev => [
-        ...prev, 
+      setChatHistory((prev) => [
+        ...prev,
         { role: 'user', content: query },
-        { role: 'assistant', content: fullResponse }
+        { role: 'assistant', content: fullResponse },
       ]);
 
       setAnswer('');
       setQuery('');
-
     } catch (error) {
-      console.error("Error en la conexión:", error);
-      setAnswer("❌ Ocurrió un error al conectar con el backend.");
+      console.error('Error en la conexión:', error);
+      setAnswer('❌ Ocurrió un error al conectar con el backend.');
     } finally {
       setIsLoading(false);
     }
@@ -74,7 +75,8 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 p-8">
-      
+
+      {/* Header */}
       <header className="mb-8 flex items-center justify-between">
         <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
           <BarChart3 className="text-blue-600" />
@@ -86,39 +88,51 @@ export default function Dashboard() {
       </header>
 
       <main className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
-        {/* Panel de Métricas */}
-        <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-6 flex flex-col">
-          <h2 className="text-xl font-semibold mb-4 border-b border-gray-100 pb-2">Resumen de Sentimiento</h2>
-          <div className="flex-1 min-h-[400px]">
-            <MetricsPanel />
-          </div>
+
+        {/* ── Panel de Métricas (2/3 del ancho) ── */}
+        {/* overflow-hidden: barrera de seguridad por si algún SVG de Recharts desborda */}
+        <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-6 overflow-hidden">
+          <h2 className="text-xl font-semibold mb-4 border-b border-gray-100 pb-2">
+            Resumen de Sentimiento
+          </h2>
+          {/* Sin wrapper flex-1: MetricsPanel se dimensiona solo con contenido natural */}
+          <MetricsPanel />
         </div>
 
-        {/* Panel del Chat RAG e Ingesta */}
+        {/* ── Chat RAG + Ingesta (1/3 del ancho) ── */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 flex flex-col h-[700px]">
           <h2 className="text-xl font-semibold mb-4 border-b border-gray-100 pb-2 flex items-center gap-2">
             <MessageSquare size={20} className="text-blue-600" />
             Asistente IA
           </h2>
 
-          {/* Componente de Subida de Archivos */}
+          {/* Subida de documentos */}
           <div className="mb-4">
             <DocumentUploader />
           </div>
-          
+
           {/* Historial de conversación */}
           <div className="flex-1 bg-slate-50 rounded-lg p-4 mb-4 overflow-y-auto border border-gray-100 flex flex-col gap-4">
-            
             {chatHistory.length === 0 && !answer && !isLoading && (
               <p className="text-gray-400 text-sm text-center mt-10">
-                Sube un documento en PDF o hazme una pregunta sobre las reseñas del producto...
+                Sube un documento PDF o hazme una pregunta sobre las reseñas del producto...
               </p>
             )}
 
             {chatHistory.map((msg, idx) => (
-              <div key={idx} className={`p-4 rounded-lg ${msg.role === 'user' ? 'bg-indigo-50 border border-indigo-100 ml-4' : 'bg-white border border-slate-200 shadow-sm mr-4'}`}>
-                <span className={`text-xs font-bold uppercase mb-2 block ${msg.role === 'user' ? 'text-indigo-600' : 'text-blue-600'}`}>
+              <div
+                key={idx}
+                className={`p-4 rounded-lg ${
+                  msg.role === 'user'
+                    ? 'bg-indigo-50 border border-indigo-100 ml-4'
+                    : 'bg-white border border-slate-200 shadow-sm mr-4'
+                }`}
+              >
+                <span
+                  className={`text-xs font-bold uppercase mb-2 block ${
+                    msg.role === 'user' ? 'text-indigo-600' : 'text-blue-600'
+                  }`}
+                >
                   {msg.role === 'user' ? 'Tú' : 'IA'}
                 </span>
                 <div className="prose prose-sm prose-slate max-w-none">
@@ -127,31 +141,34 @@ export default function Dashboard() {
               </div>
             ))}
 
+            {/* Burbuja de streaming en tiempo real */}
             {(answer || isLoading) && (
               <div className="p-4 rounded-lg bg-white border border-blue-200 shadow-sm mr-4">
                 <span className="text-xs font-bold uppercase text-blue-600 mb-2 flex items-center gap-2">
-                  IA Analizando... {isLoading && !answer && <Loader2 size={14} className="animate-spin text-blue-500" />}
+                  IA Analizando...
+                  {isLoading && !answer && (
+                    <Loader2 size={14} className="animate-spin text-blue-500" />
+                  )}
                 </span>
                 <div className="prose prose-sm prose-slate max-w-none">
                   <ReactMarkdown>{answer}</ReactMarkdown>
                 </div>
               </div>
             )}
-            
           </div>
 
-          {/* Caja de entrada para consultas */}
+          {/* Input */}
           <div className="relative mt-auto">
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-              placeholder="Ej: ¿Qué dicen de la batería?" 
-              className="w-full pl-4 pr-12 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+              placeholder="Ej: ¿Qué dicen de la batería?"
+              className="w-full pl-4 pr-12 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-gray-900"
               disabled={isLoading}
             />
-            <button 
+            <button
               onClick={handleSearch}
               disabled={isLoading || !query.trim()}
               className="absolute right-2 top-2 p-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 transition-colors"
@@ -160,7 +177,7 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
-        
+
       </main>
     </div>
   );
