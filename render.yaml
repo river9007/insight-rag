@@ -1,0 +1,29 @@
+# Archivo: render.yaml (en la raíz del repositorio)
+# Render lo detecta automáticamente y configura el servicio con estos parámetros.
+
+services:
+  - type: web
+    name: insightrag-backend
+    env: python
+    rootDir: backend
+    plan: free
+
+    # Pre-descarga el modelo ONNX durante el build para evitar delay en la primera request.
+    # Si Render no persiste el caché entre builds, el modelo se descarga al arrancar (~10s).
+    buildCommand: >
+      pip install -r requirements.txt &&
+      python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5'); print('Modelo cacheado correctamente')"
+
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+
+    # Variables de entorno — valores configurados en el dashboard de Render,
+    # nunca en este archivo (sync: false = Render pide el valor manualmente).
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false

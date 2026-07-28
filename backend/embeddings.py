@@ -1,21 +1,17 @@
-import os
-import google.generativeai as genai
+# Archivo: backend/embeddings.py
+from fastembed import TextEmbedding
 
-# 1. Configurar el cliente usando GEMINI_API_KEY (la que pondremos en Render)
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+# BAAI/bge-small-en-v1.5:
+#   - 384 dimensiones exactas (compatible con Vector(384) en Supabase)
+#   - Modelo ONNX: ~70MB, sin PyTorch, cabe en Render free tier (512MB RAM)
+#   - Alta calidad semántica para tareas de retrieval
+#   - Se descarga una vez en build/primer arranque y queda cacheado
+_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 
 def get_embedding(text: str) -> list[float]:
     """
-    Toma un texto y devuelve su vector de embedding usando Gemini de forma ligera.
+    Devuelve un vector de 384 dimensiones para el texto dado.
+    Ejecución completamente local — sin llamadas a APIs externas.
     """
-    try:
-        # 2. Llamada a la API de embeddings de Google
-        result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=text,
-            task_type="retrieval_document", 
-        )
-        return result['embedding']
-    except Exception as e:
-        print(f"Error al generar embedding con Gemini: {e}")
-        return []
+    embeddings = list(_model.embed([text]))
+    return embeddings[0].tolist()

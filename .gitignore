@@ -1,9 +1,29 @@
+# ── Secretos y entorno ─────────────────────────────────────────────────────────
 .env
+.env.local
+.env.production
+
+# ── Python ─────────────────────────────────────────────────────────────────────
 venv/
 __pycache__/
 *.pyc
-.DS_Store
-.next/
-node_modules/
-*.json
+*.pyo
+*.pyd
+.Python
+
+# ── Datos locales del backend (no van a producción) ────────────────────────────
+backend/datos.json
+
+# ── Credenciales de Google (NUNCA deben subirse) ───────────────────────────────
 client_secret*.json
+
+# ── Next.js ────────────────────────────────────────────────────────────────────
+.next/
+frontend/.next/
+
+# ── Node ───────────────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Sistema operativo ──────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
