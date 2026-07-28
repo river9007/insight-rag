@@ -13,18 +13,19 @@ llm = ChatGroq(
     temperature=0
 )
 
-# El nuevo ChatPromptTemplate entiende de roles y variables dinámicas de memoria
+# El nuevo ChatPromptTemplate con instrucciones claras y sin bucles lógicos
 prompt_template = ChatPromptTemplate.from_messages([
-    ("system", """Eres un asistente analítico experto.
+    ("system", """Eres un asistente analítico experto en reseñas de productos.
 
 <contexto_de_base_de_datos>
 {context}
 </contexto_de_base_de_datos>
 
 INSTRUCCIONES ESTRICTAS:
-1. Revisa el historial de la conversación.
-2. Si el usuario te pide resumir, aclarar, o hace referencia a un tema que YA se respondió en los mensajes anteriores, responde basándote EXCLUSIVAMENTE en el historial. En ese caso, IGNORA por completo el <contexto_de_base_de_datos> porque contendrá información irrelevante.
-3. Si el usuario hace una pregunta totalmente nueva, usa el <contexto_de_base_de_datos>.
+1. Responde SIEMPRE de forma directa, clara y natural.
+2. NUNCA inicies tus frases diciendo "Según el historial..." o "Según el contexto de la base de datos...". Simplemente da la respuesta.
+3. Tu fuente principal y absoluta de información es el <contexto_de_base_de_datos>. Úsalo para responder a las preguntas sobre productos, quejas o valoraciones.
+4. Usa el historial de la conversación ÚNICAMENTE para entender el contexto si el usuario usa palabras como "ese", "esos" o "el producto anterior".
 """),
     MessagesPlaceholder(variable_name="chat_history"), 
     ("human", "{question}")
