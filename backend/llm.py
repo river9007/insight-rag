@@ -1,6 +1,19 @@
 # Archivo: backend/llm.py
+import os
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+load_dotenv()
+
+# Inicializamos la conexión con Groq usando el modelo Llama 3 Open Source
+llm = ChatGroq(
+    groq_api_key=os.getenv("GROQ_API_KEY"),
+    model_name="llama-3.1-8b-instant", 
+    temperature=0
+)
+
+# El nuevo ChatPromptTemplate con las instrucciones estrictas corregidas
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", """Eres un asistente analítico experto en reseñas de productos.
 
@@ -18,12 +31,23 @@ INSTRUCCIONES ESTRICTAS:
     ("human", "{question}")
 ])
 
-# 👇 DEBES AGREGAR ESTAS FUNCIONES QUE TU main.py ESTÁ INTENTANDO IMPORTAR 👇
+rag_chain = prompt_template | llm
 
-async def generate_insight(question: str, context: str, chat_history: list):
-    # Aquí va tu lógica síncrona para llamar al LLM
-    pass
+async def generate_insight(context: str, question: str, chat_history: list = []) -> str:
+    # Llamada real al LLM para obtener la respuesta completa
+    response = await rag_chain.ainvoke({
+        "context": context, 
+        "chat_history": chat_history,
+        "question": question
+    })
+    return response.content
 
-async def stream_insight(question: str, context: str, chat_history: list):
-    # Aquí va tu lógica de streaming (SSE) para llamar al LLM
-    pass
+async def stream_insight(context: str, question: str, chat_history: list = []):
+    # Llamada real al LLM para el efecto de escritura en vivo (streaming)
+    async for chunk in rag_chain.astream({
+        "context": context, 
+        "chat_history": chat_history,
+        "question": question
+    }):
+        if chunk.content:
+            yield chunk.content
