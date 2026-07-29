@@ -306,16 +306,24 @@ async def ingest_document(
         # Construimos los fragmentos finales: (product_id, rating, texto, chunk_index)
         # chunk_index=0 siempre marca el primer fragmento de la reseña real;
         # 1,2,3... marcan sub-fragmentos cuando la reseña era muy larga.
+        # Construimos los fragmentos finales: (product_id, rating, texto, chunk_index)
         chunks_to_insert: list[tuple[str, int, str, int]] = []
 
         for review in parsed_reviews:
-            enriched_text = f"Producto: {review.product_name} ({review.product_id}). Reseña: {review.text}"
-
-            if len(enriched_text) > MAX_REVIEW_CHUNK_CHARS:
-                sub_texts = review_sub_splitter.split_text(enriched_text)
+            # 1. Definimos el encabezado estricto que DEBE ir en todos los fragmentos
+            header = f"Producto: {review.product_name} ({review.product_id}). Reseña: "
+            
+            # 2. Comprobamos si la longitud total excede el límite
+            if len(header) + len(review.text) > MAX_REVIEW_CHUNK_CHARS:
+                # 3. Dividimos SOLAMENTE el cuerpo de la reseña
+                sub_texts = review_sub_splitter.split_text(review.text)
+                
                 for idx, sub_text in enumerate(sub_texts):
-                    chunks_to_insert.append((review.product_id, review.rating, sub_text, idx))
+                    # 4. Inyectamos el encabezado en CADA sub-fragmento individual
+                    enriched_sub_chunk = f"{header}{sub_text}"
+                    chunks_to_insert.append((review.product_id, review.rating, enriched_sub_chunk, idx))
             else:
+                enriched_text = f"{header}{review.text}"
                 chunks_to_insert.append((review.product_id, review.rating, enriched_text, 0))
 
         new_reviews = []
