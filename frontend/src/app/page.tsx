@@ -14,6 +14,10 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(false);
   const [chatHistory, setChatHistory] = useState<{ role: string; content: string }[]>([]);
 
+  // Se incrementa tras cada ingest exitoso — MetricsPanel escucha este
+  // valor y vuelve a pedir los datos cuando cambia.
+  const [metricsRefreshTrigger, setMetricsRefreshTrigger] = useState(0);
+
   const handleSearch = async () => {
     if (!query.trim()) return;
 
@@ -23,7 +27,6 @@ export default function Dashboard() {
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-      // Auth Supabase — conservado del dashboard actual
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
@@ -90,13 +93,11 @@ export default function Dashboard() {
       <main className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
         {/* ── Panel de Métricas (2/3 del ancho) ── */}
-        {/* overflow-hidden: barrera de seguridad por si algún SVG de Recharts desborda */}
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-6 overflow-hidden">
           <h2 className="text-xl font-semibold mb-4 border-b border-gray-100 pb-2">
             Resumen de Sentimiento
           </h2>
-          {/* Sin wrapper flex-1: MetricsPanel se dimensiona solo con contenido natural */}
-          <MetricsPanel />
+          <MetricsPanel refreshTrigger={metricsRefreshTrigger} />
         </div>
 
         {/* ── Chat RAG + Ingesta (1/3 del ancho) ── */}
@@ -106,9 +107,11 @@ export default function Dashboard() {
             Asistente IA
           </h2>
 
-          {/* Subida de documentos */}
+          {/* Subida de documentos — al terminar, dispara el refresh de MetricsPanel */}
           <div className="mb-4">
-            <DocumentUploader />
+            <DocumentUploader
+              onUploadSuccess={() => setMetricsRefreshTrigger((prev) => prev + 1)}
+            />
           </div>
 
           {/* Historial de conversación */}
@@ -141,7 +144,6 @@ export default function Dashboard() {
               </div>
             ))}
 
-            {/* Burbuja de streaming en tiempo real */}
             {(answer || isLoading) && (
               <div className="p-4 rounded-lg bg-white border border-blue-200 shadow-sm mr-4">
                 <span className="text-xs font-bold uppercase text-blue-600 mb-2 flex items-center gap-2">

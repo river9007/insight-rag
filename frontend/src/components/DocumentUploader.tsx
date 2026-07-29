@@ -1,8 +1,15 @@
+// Archivo: frontend/src/components/DocumentUploader.tsx
 import { useState } from 'react';
 import { UploadCloud, Loader2, CheckCircle } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 
-export default function DocumentUploader() {
+interface DocumentUploaderProps {
+  // Se llama tras un ingest exitoso, para que el padre pueda refrescar
+  // otros componentes (ej. MetricsPanel) sin recargar la página.
+  onUploadSuccess?: () => void;
+}
+
+export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -23,7 +30,7 @@ export default function DocumentUploader() {
 
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      
+
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
@@ -38,7 +45,8 @@ export default function DocumentUploader() {
       const data = await response.json();
 
       if (response.ok) {
-        setStatusMessage(`¡Éxito! Archivo procesado en ${data.chunks_creados} fragmentos.`);
+        setStatusMessage(`¡Éxito! ${data.resenas_detectadas} reseña(s) procesada(s) en ${data.chunks_creados} fragmento(s).`);
+        onUploadSuccess?.();
       } else {
         setStatusMessage(`Error: ${data.detail || 'Fallo en la ingesta'}`);
       }
@@ -47,7 +55,7 @@ export default function DocumentUploader() {
       setStatusMessage('Error de conexión con el servidor.');
     } finally {
       setIsUploading(false);
-      event.target.value = ''; 
+      event.target.value = '';
     }
   };
 
@@ -62,12 +70,12 @@ export default function DocumentUploader() {
         <span className="text-sm font-medium text-gray-600">
           {isUploading ? 'Vectorizando documento...' : 'Haz clic para subir feedback (PDF)'}
         </span>
-        <input 
-          type="file" 
-          className="hidden" 
-          accept=".pdf" 
-          onChange={handleFileUpload} 
-          disabled={isUploading} 
+        <input
+          type="file"
+          className="hidden"
+          accept=".pdf"
+          onChange={handleFileUpload}
+          disabled={isUploading}
         />
       </label>
 
