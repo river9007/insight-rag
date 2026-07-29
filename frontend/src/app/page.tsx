@@ -39,7 +39,6 @@ export default function Dashboard() {
         body: JSON.stringify({
           query,
           history: chatHistory,
-          limit: 5,
         }),
       });
 

@@ -64,15 +64,13 @@ class Message(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str = Field(..., description="Texto o concepto a buscar en la base de datos de conocimiento")
-    # Cambiamos el límite de 3 a 10
-    limit: int = Field(default=10, description="Número máximo de fragmentos a recuperar")
+    limit: int = Field(default=10, ge=1, le=20, description="Número máximo de fragmentos a recuperar (mínimo 1, máximo 20)")
     product_id: Optional[str] = Field(default=None, description="ID del producto para filtrar contexto")
 
 class AnalyzeRequest(BaseModel):
     query: str = Field(..., description="La pregunta que quieres que Llama 3 responda basándose en el contexto")
     history: List[Message] = Field(default=[], description="Historial de la conversación para mantener el contexto")
-    # Cambiamos el límite de 5 a 10
-    limit: int = Field(default=10, description="Número de documentos a extraer de la base vectorial")
+    limit: int = Field(default=10, ge=1, le=20, description="Número de documentos a extraer de la base vectorial (mínimo 1, máximo 20)")
     product_id: Optional[str] = Field(default=None, description="ID del producto para filtrar contexto")
 
 @app.get("/")
