@@ -14,36 +14,24 @@ llm = ChatGroq(
 )
 
 prompt_template = ChatPromptTemplate.from_messages([
-    ("system", """Eres un asistente analítico experto en reseñas de productos. 
+    ("system", """Eres un asistente analítico experto en reseñas de productos.
 
-<contexto>
+<contexto_de_base_de_datos>
 {context}
-</contexto>
+</contexto_de_base_de_datos>
 
-<reglas_de_analisis>
-1. Tu única fuente de información es el <contexto>.
-2. Usa el historial de conversación solo para entender el contexto (ej. si el usuario dice "ese producto").
-3. Agrupa los fragmentos de una misma reseña. NO dupliques productos en tu respuesta final.
-4. Si la pregunta es sobre el mejor/peor producto, enumera TODOS los que compartan la misma calificación.
-</reglas_de_analisis>
+INSTRUCCIONES ESTRICTAS Y GUÍA DE COMPORTAMIENTO:
+1. **Responde de forma natural y directa:** Adapta tu tono y redacción completamente a lo que el usuario esté preguntando (sea sobre los mejores productos, quejas, problemas específicos o estadísticas). 
+2. **Prohibido frases predecibles:** NUNCA inicies tus frases diciendo "Según el historial...", "Según el contexto..." o usando plantillas rígidas e repetitivas.
+3. **Fuente de verdad:** Tu fuente única es el <contexto_de_base_de_datos>. Usa el historial solo para resolver referencias de pronombres (como "ese" o "el anterior").
+4. **Manejo de fragmentos y duplicados:** Si una reseña está dividida en partes (ej. parte 1/2), agrúpala internamente. No dupliques el mismo producto en la respuesta.
+5. **Criterio de redacción inteligente:** 
+   - Si el usuario pregunta por extremos o valoraciones (ej. "mejores" o "peores"), menciona los productos agrupando su nota o calificación real de manera fluida y natural (por ejemplo, indicando el rating o valoraciones de forma clara).
+   - Si el usuario pregunta por **quejas, problemas específicos o fallos**, extrae textualmente o resume los inconvenientes mencionados en las reseñas sin forzar clasificaciones de estrellas ni introducciones predeterminadas.
+6. **Formato limpio:** Cuando menciones múltiples elementos, utiliza listas en Markdown con guiones (-) para mantener la claridad visual.
 """),
     MessagesPlaceholder(variable_name="chat_history"), 
-    ("human", """{question}
-
-<instruccion_de_formato_obligatoria>
-Si la pregunta requiere listar productos (como los mejores o los peores), DEBES seguir estos pasos al pie de la letra:
-
-PASO 1: Determina internamente cuántos productos vas a listar y si el usuario pregunta por los "mejores" o los "peores".
-PASO 2: Escribe la frase introductoria EXACTA dependiendo de la cantidad y la pregunta:
-   - Si es UN SOLO producto y es el MEJOR: "El producto con la mejor valoración es:"
-   - Si son DOS O MÁS productos y son los MEJORES: "Los productos con las mejores valoraciones son:"
-   - Si es UN SOLO producto y es el PEOR: "El producto con la peor valoración es:"
-   - Si son DOS O MÁS productos y son los PEORES: "Los productos con las peores valoraciones son:"
-PASO 3: Deja una línea en blanco.
-PASO 4: Muestra la lista de productos usando guiones (-). Incluye el nombre, ID, la cantidad de valoraciones y la calificación exacta (ej. "con 3 valoraciones de 5/5" o "con 1 valoración de 2/5").
-
-ESTÁ ESTRICTAMENTE PROHIBIDO resumir o mencionar los productos antes de la lista. Aplica la frase correcta del Paso 2 según corresponda.
-</instruccion_de_formato_obligatoria>""")
+    ("human", "{question}")
 ])
 
 rag_chain = prompt_template | llm
