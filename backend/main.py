@@ -77,6 +77,27 @@ class AnalyzeRequest(BaseModel):
 async def root():
     return {"status": "ok", "message": "InsightRAG Backend corriendo"}
 
+# --- FUNCIÓN AUXILIAR DRY PARA LA BÚSQUEDA ---
+async def get_relevant_reviews(
+    query: str, 
+    limit: int, 
+    db: AsyncSession, 
+    product_id: Optional[str] = None
+) -> List[models.Review]:
+    query_vector = await asyncio.to_thread(get_embedding, query)
+    stmt = select(models.Review)
+    
+    if product_id:
+        stmt = stmt.where(models.Review.product_id == product_id)
+        
+    stmt = (
+        stmt.order_by(models.Review.embedding.cosine_distance(query_vector))
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 # 1. ENDPOINT: Búsqueda Semántica (Protegido)
 @app.post("/search")
 async def search_reviews(
@@ -85,20 +106,8 @@ async def search_reviews(
     user: dict = Depends(get_current_user)
 ):
     print(f"Usuario {user.get('sub')} buscando: '{request.query}'")
-    query_vector = await asyncio.to_thread(get_embedding, request.query)
-
-    stmt = select(models.Review)
-
-    if request.product_id:
-        stmt = stmt.where(models.Review.product_id == request.product_id)
-
-    stmt = (
-        stmt.order_by(models.Review.embedding.cosine_distance(query_vector))
-        .limit(request.limit)
-    )
-
-    result = await db.execute(stmt)
-    reviews = result.scalars().all()
+    
+    reviews = await get_relevant_reviews(request.query, request.limit, db, request.product_id)
 
     return {
         "query": request.query,
@@ -120,32 +129,22 @@ async def analyze_reviews(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    query_vector = await asyncio.to_thread(get_embedding, request.query)
-
-    stmt = select(models.Review)
-
-    if request.product_id:
-        stmt = stmt.where(models.Review.product_id == request.product_id)
-
-    stmt = (
-        stmt.order_by(models.Review.embedding.cosine_distance(query_vector))
-        .limit(request.limit)
-    )
-
-    result = await db.execute(stmt)
-    reviews = result.scalars().all()
+    reviews = await get_relevant_reviews(request.query, request.limit, db, request.product_id)
 
     context_text = "\n".join([
-        f"- Rating: {r.rating}/5. Reseña: {r.review_text}"
+        f"- Rating: {r.rating}/5. {r.review_text}"
         for r in reviews
     ])
 
-    langchain_history = []
-    for msg in request.history:
-        if msg.role == "user":
-            langchain_history.append(HumanMessage(content=msg.content))
-        elif msg.role == "assistant":
-            langchain_history.append(AIMessage(content=msg.content))
+    role_mapping = {
+        "user": HumanMessage,
+        "assistant": AIMessage
+    }
+    langchain_history = [
+        role_mapping[msg.role](content=msg.content) 
+        for msg in request.history 
+        if msg.role in role_mapping
+    ]
 
     insight = await generate_insight(context=context_text, question=request.query, chat_history=langchain_history)
 
@@ -162,32 +161,22 @@ async def analyze_reviews_stream(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    query_vector = await asyncio.to_thread(get_embedding, request.query)
-
-    stmt = select(models.Review)
-
-    if request.product_id:
-        stmt = stmt.where(models.Review.product_id == request.product_id)
-
-    stmt = (
-        stmt.order_by(models.Review.embedding.cosine_distance(query_vector))
-        .limit(request.limit)
-    )
-
-    result = await db.execute(stmt)
-    reviews = result.scalars().all()
+    reviews = await get_relevant_reviews(request.query, request.limit, db, request.product_id)
 
     context_text = "\n".join([
-        f"- Rating: {r.rating}/5. Reseña: {r.review_text}"
+        f"- Rating: {r.rating}/5. {r.review_text}"
         for r in reviews
     ])
 
-    langchain_history = []
-    for msg in request.history:
-        if msg.role == "user":
-            langchain_history.append(HumanMessage(content=msg.content))
-        elif msg.role == "assistant":
-            langchain_history.append(AIMessage(content=msg.content))
+    role_mapping = {
+        "user": HumanMessage,
+        "assistant": AIMessage
+    }
+    langchain_history = [
+        role_mapping[msg.role](content=msg.content) 
+        for msg in request.history 
+        if msg.role in role_mapping
+    ]
 
     async def event_generator():
         async for chunk in stream_insight(context=context_text, question=request.query, chat_history=langchain_history):
@@ -280,6 +269,11 @@ async def ingest_document(
 
     try:
         file_content = await file.read()
+        
+        # Límite de tamaño: Rechazar archivos mayores a 10MB para prevenir falta de memoria (OOM)
+        if len(file_content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="El PDF es demasiado grande. Máximo 10MB permitido.")
+
         pdf_reader = pypdf.PdfReader(io.BytesIO(file_content))
 
         extracted_text = ""
@@ -304,40 +298,46 @@ async def ingest_document(
             )
 
         # Construimos los fragmentos finales: (product_id, rating, texto, chunk_index)
-        # chunk_index=0 siempre marca el primer fragmento de la reseña real;
-        # 1,2,3... marcan sub-fragmentos cuando la reseña era muy larga.
-        # Construimos los fragmentos finales: (product_id, rating, texto, chunk_index)
         chunks_to_insert: list[tuple[str, int, str, int]] = []
 
         for review in parsed_reviews:
-            # 1. Definimos el encabezado estricto que DEBE ir en todos los fragmentos
             header = f"Producto: {review.product_name} ({review.product_id}). Reseña: "
             
-            # 2. Comprobamos si la longitud total excede el límite
             if len(header) + len(review.text) > MAX_REVIEW_CHUNK_CHARS:
-                # 3. Dividimos SOLAMENTE el cuerpo de la reseña
                 sub_texts = review_sub_splitter.split_text(review.text)
                 
                 for idx, sub_text in enumerate(sub_texts):
-                    # 4. Inyectamos el encabezado en CADA sub-fragmento individual
                     enriched_sub_chunk = f"{header}{sub_text}"
                     chunks_to_insert.append((review.product_id, review.rating, enriched_sub_chunk, idx))
             else:
                 enriched_text = f"{header}{review.text}"
                 chunks_to_insert.append((review.product_id, review.rating, enriched_text, 0))
 
-        new_reviews = []
-        for product_id, rating, text, chunk_index in chunks_to_insert:
+        # PROCESAMIENTO EN LOTES (Concurrente) PARA LOS EMBEDDINGS
+        async def process_chunk(product_id, rating, text, chunk_index):
             vector = await asyncio.to_thread(get_embedding, text)
-
-            review_entry = models.Review(
+            return models.Review(
                 product_id=product_id,
                 rating=rating,
                 review_text=text,
                 embedding=vector,
                 chunk_index=chunk_index,
             )
-            new_reviews.append(review_entry)
+
+        new_reviews = []
+        batch_size = 10  # Lote de 10 peticiones a la API a la vez
+
+        for i in range(0, len(chunks_to_insert), batch_size):
+            batch = chunks_to_insert[i:i+batch_size]
+            
+            tasks = [
+                process_chunk(pid, rat, txt, idx) 
+                for pid, rat, txt, idx in batch
+            ]
+            
+            # Recolectar embeddings del lote de forma concurrente
+            batch_results = await asyncio.gather(*tasks)
+            new_reviews.extend(batch_results)
 
         db.add_all(new_reviews)
         await db.commit()
