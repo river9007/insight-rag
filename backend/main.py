@@ -172,11 +172,14 @@ async def root():
 async def get_relevant_reviews(
     query: str, 
     limit: int, 
-    db: AsyncSession, 
+    db: AsyncSession,
+    user_id: str, # 🛡️ NUEVO REQUISITO
     product_id: Optional[str] = None
 ) -> List[models.Review]:
     query_vector = await asyncio.to_thread(get_embedding, query)
-    stmt = select(models.Review)
+    
+    # 🛡️ FILTRO CRÍTICO: Solo buscar en los documentos de este usuario
+    stmt = select(models.Review).where(models.Review.user_id == user_id)
     
     if product_id:
         stmt = stmt.where(models.Review.product_id == product_id)
@@ -198,7 +201,11 @@ async def search_reviews(
 ):
     print(f"Usuario {user.get('sub')} buscando: '{request.query}'")
     
-    reviews = await get_relevant_reviews(request.query, request.limit, db, request.product_id)
+    # Extraemos el ID único del usuario desde el token JWT
+    user_id = user.get("sub")
+    
+    # Pasamos el user_id a la función auxiliar
+    reviews = await get_relevant_reviews(request.query, request.limit, db, user_id, request.product_id)
 
     return {
         "query": request.query,
@@ -222,7 +229,11 @@ async def analyze_reviews(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    reviews = await get_relevant_reviews(request.query, request.limit, db, request.product_id)
+    # Extraemos el ID único del usuario desde el token JWT
+    user_id = user.get("sub")
+    
+    # Pasamos el user_id a la función auxiliar
+    reviews = await get_relevant_reviews(request.query, request.limit, db, user_id, request.product_id)
 
     context_text = build_context_text(reviews)
 
@@ -251,7 +262,11 @@ async def analyze_reviews_stream(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    reviews = await get_relevant_reviews(request.query, request.limit, db, request.product_id)
+    # Extraemos el ID único del usuario desde el token JWT
+    user_id = user.get("sub")
+    
+    # Pasamos el user_id a la función auxiliar
+    reviews = await get_relevant_reviews(request.query, request.limit, db, user_id, request.product_id)
 
     context_text = build_context_text(reviews)
 
@@ -287,7 +302,14 @@ async def get_metrics(
     chunk_index == 0 ya cuenta correctamente cada reseña real una sola vez,
     incluso si el mismo product_id tuviera varias reseñas distintas.
     """
-    base_filter = [models.Review.chunk_index == 0]
+    # Extraemos el ID único del usuario desde el token JWT
+    user_id = user.get("sub")
+
+    # 🛡️ FILTRO CRÍTICO: Métricas solo de las reseñas del usuario actual
+    base_filter = [
+        models.Review.chunk_index == 0,
+        models.Review.user_id == user_id
+    ]
     if product_id:
         base_filter.append(models.Review.product_id == product_id)
 
@@ -318,7 +340,10 @@ async def get_metrics(
 
     products_stmt = (
         select(models.Review.product_id)
-        .where(models.Review.chunk_index == 0)
+        .where(
+            models.Review.chunk_index == 0,
+            models.Review.user_id == user_id
+        )
         .distinct()
         .order_by(models.Review.product_id)
     )
@@ -405,12 +430,17 @@ async def ingest_document(
                 enriched_sub_chunk = f"{base_header} (parte {idx + 1}/{total_parts}): {sub_text}"
                 chunks_to_insert.append((review.product_id, review.rating, enriched_sub_chunk, idx, group_id))
 
+        # Extraemos el ID del usuario como texto y lo convertimos a objeto UUID
+        raw_user_id = user.get("sub")
+        user_uuid = uuid.UUID(raw_user_id)
+
         # Procesamiento secuencial de embeddings (una llamada a la vez).
         new_reviews = []
         for product_id, rating, text, chunk_index, group_id in chunks_to_insert:
             vector = await asyncio.to_thread(get_embedding, text)
 
             review_entry = models.Review(
+                user_id=user_uuid, # 🛡️ Pasamos el objeto UUID correcto
                 product_id=product_id,
                 rating=rating,
                 review_text=text,
