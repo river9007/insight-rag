@@ -1,4 +1,6 @@
 import io
+import re
+import uuid
 import asyncio
 from typing import List, Optional
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
@@ -22,14 +24,103 @@ import pypdf
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from review_parser import parse_reviews
 
-# Umbral para sub-dividir una reseña individual demasiado larga.
+# Umbral objetivo para el tamaño final de cada fragmento (encabezado + cuerpo).
 # Por encima de esto, un solo embedding pierde precisión semántica.
 MAX_REVIEW_CHUNK_CHARS = 800
 
-review_sub_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=MAX_REVIEW_CHUNK_CHARS,
-    chunk_overlap=100,
+# Reserva fija para la etiqueta "(parte X/Y): " que se añade a los sub-fragmentos
+# de una reseña larga. 20 caracteres cubre holgadamente hasta 999 partes.
+RESERVED_PART_LABEL_CHARS = 20
+
+# Piso mínimo de espacio útil para el CUERPO de cada sub-fragmento.
+MIN_BODY_CHUNK_SIZE = 200
+
+# Extrae "Producto: X (Y)." del inicio de un fragmento enriquecido, dejando
+# aparte el cuerpo real de la reseña. Se usa para reconstruir una reseña
+# completa a partir de varios fragmentos sin repetir el encabezado.
+_HEADER_PATTERN = re.compile(
+    r"^(Producto: .+?\.) Reseña(?: \(parte \d+/\d+\))?: ",
+    re.DOTALL,
 )
+
+def _split_header_body(review_text: str) -> tuple[str, str]:
+    match = _HEADER_PATTERN.match(review_text)
+    if match:
+        return match.group(1), review_text[match.end():]
+    # Fallback defensivo: no debería ocurrir con datos generados por
+    # nuestro propio ingest, pero evita un crash si el formato no matchea.
+    return "", review_text
+
+
+def build_context_text(reviews: List[models.Review]) -> str:
+    """
+    Consolida los fragmentos recuperados en UNA sola línea de contexto por
+    reseña real, agrupando por review_group_id (NO por product_id — dos
+    reseñas distintas del mismo producto tienen review_group_id distintos,
+    así que nunca se fusionan entre sí).
+
+    Por qué existe esta función: en pruebas reales, cuando una reseña larga
+    llegaba dividida en 3 fragmentos, el contexto anterior generaba 3 líneas
+    "- Rating: 5/5." repetidas. El modelo (Llama 3.1 8B) interpretaba ese
+    patrón visual repetido como si fueran 3 reseñas distintas, incluso con
+    una instrucción explícita en el prompt pidiéndole lo contrario. La
+    solución robusta es resolver la consolidación aquí, en código
+    determinista, en vez de depender de que el LLM siga correctamente una
+    instrucción textual en cada respuesta.
+    """
+    if not reviews:
+        return "No se encontraron reseñas en la base de datos."
+
+    # ------------------------------------------------------------------
+    # NUEVO: Cálculo de extremos en código para garantizar empates exactos
+    # ------------------------------------------------------------------
+    max_rating = max(r.rating for r in reviews)
+    min_rating = min(r.rating for r in reviews)
+    
+    # Extraemos los IDs únicos de todos los productos que empatan
+    mejores_ids = set([r.product_id for r in reviews if r.rating == max_rating])
+    peores_ids = set([r.product_id for r in reviews if r.rating == min_rating])
+    
+    resumen_calculado = (
+        "[DATOS PRE-CALCULADOS EXACTOS POR EL SISTEMA]\n"
+        f"- Mejor valoración presente: {max_rating}/5 (Corresponde a: {', '.join(mejores_ids)})\n"
+        f"- Peor valoración presente: {min_rating}/5 (Corresponde a: {', '.join(peores_ids)})\n"
+        "[FIN DATOS PRE-CALCULADOS]\n\n"
+    )
+
+    groups: dict[str, dict] = {}
+    order: list[str] = []
+
+    for r in reviews:
+        gid = r.review_group_id
+        if gid not in groups:
+            groups[gid] = {"rating": r.rating, "chunks": []}
+            order.append(gid)
+        groups[gid]["chunks"].append((r.chunk_index, r.review_text))
+
+    lines = []
+    for gid in order:
+        data = groups[gid]
+        # Ordenamos por chunk_index real (no por el orden de recuperación
+        # por similitud, que puede venir desordenado) para reconstruir la
+        # reseña en su secuencia original.
+        chunks_sorted = sorted(data["chunks"], key=lambda c: c[0])
+
+        product_header = ""
+        bodies = []
+        for _, text in chunks_sorted:
+            header, body = _split_header_body(text)
+            if not product_header:
+                product_header = header
+            bodies.append(body)
+
+        combined_body = " ".join(bodies)
+        prefix = f"{product_header} " if product_header else ""
+        lines.append(f"- Rating: {data['rating']}/5. {prefix}Reseña: {combined_body}")
+
+    # Retornamos el resumen matemático exacto + las reseñas agrupadas limpias
+    return resumen_calculado + "\n".join(lines)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -116,6 +207,8 @@ async def search_reviews(
                 "id": r.id,
                 "product_id": r.product_id,
                 "rating": r.rating,
+                "review_group_id": r.review_group_id,
+                "chunk_index": r.chunk_index,
                 "text": r.review_text
             }
             for r in reviews
@@ -131,10 +224,7 @@ async def analyze_reviews(
 ):
     reviews = await get_relevant_reviews(request.query, request.limit, db, request.product_id)
 
-    context_text = "\n".join([
-        f"- Rating: {r.rating}/5. {r.review_text}"
-        for r in reviews
-    ])
+    context_text = build_context_text(reviews)
 
     role_mapping = {
         "user": HumanMessage,
@@ -163,10 +253,7 @@ async def analyze_reviews_stream(
 ):
     reviews = await get_relevant_reviews(request.query, request.limit, db, request.product_id)
 
-    context_text = "\n".join([
-        f"- Rating: {r.rating}/5. {r.review_text}"
-        for r in reviews
-    ])
+    context_text = build_context_text(reviews)
 
     role_mapping = {
         "user": HumanMessage,
@@ -195,32 +282,27 @@ async def get_metrics(
     Devuelve estadísticas agregadas sobre las reseñas ingeridas.
 
     IMPORTANTE: todas las agregaciones filtran por chunk_index == 0.
-    Esto es necesario porque una reseña larga se sub-divide en varias filas
-    (ver review_parser.py + MAX_REVIEW_CHUNK_CHARS en el ingest); contar
-    todas las filas inflaría el total y la distribución cada vez que una
-    reseña se fragmenta. chunk_index == 0 identifica el primer fragmento
-    de cada reseña real, que es lo que representa "una reseña" para el usuario.
+    chunk_index se reinicia en 0 para CADA reseña real (independientemente
+    de su review_group_id o product_id), así que contar filas con
+    chunk_index == 0 ya cuenta correctamente cada reseña real una sola vez,
+    incluso si el mismo product_id tuviera varias reseñas distintas.
     """
     base_filter = [models.Review.chunk_index == 0]
     if product_id:
         base_filter.append(models.Review.product_id == product_id)
 
-    # Total de reseñas reales
     total_stmt = select(func.count()).select_from(models.Review).where(*base_filter)
     total = (await db.execute(total_stmt)).scalar() or 0
 
-    # Promedio de calificación
     avg_stmt = select(func.avg(models.Review.rating)).where(*base_filter)
     avg_raw = (await db.execute(avg_stmt)).scalar()
     promedio = round(float(avg_raw), 1) if avg_raw is not None else 0.0
 
-    # Alertas: reseñas con calificación 1 o 2
     alertas_stmt = select(func.count()).select_from(models.Review).where(
         *base_filter, models.Review.rating <= 2
     )
     alertas = (await db.execute(alertas_stmt)).scalar() or 0
 
-    # Distribución por calificación (1 a 5 estrellas)
     dist_stmt = (
         select(models.Review.rating, func.count().label("cantidad"))
         .where(*base_filter)
@@ -229,16 +311,11 @@ async def get_metrics(
     dist_result = await db.execute(dist_stmt)
     dist_raw = {row.rating: row.cantidad for row in dist_result}
 
-    # Se incluyen las 5 categorías siempre, aunque tengan 0 reseñas,
-    # para que el gráfico de barras no cambie de forma entre consultas.
     distribution = [
         {"rating": r, "cantidad": dist_raw.get(r, 0)}
         for r in [5, 4, 3, 2, 1]
     ]
 
-    # Lista de productos disponibles para el filtro del frontend.
-    # Siempre es GLOBAL (no aplica el product_id actual) para que el
-    # desplegable no pierda opciones al filtrar por un producto.
     products_stmt = (
         select(models.Review.product_id)
         .where(models.Review.chunk_index == 0)
@@ -269,8 +346,7 @@ async def ingest_document(
 
     try:
         file_content = await file.read()
-        
-        # Límite de tamaño: Rechazar archivos mayores a 10MB para prevenir falta de memoria (OOM)
+
         if len(file_content) > 10 * 1024 * 1024:
             raise HTTPException(status_code=413, detail="El PDF es demasiado grande. Máximo 10MB permitido.")
 
@@ -297,47 +373,52 @@ async def ingest_document(
                 )
             )
 
-        # Construimos los fragmentos finales: (product_id, rating, texto, chunk_index)
-        chunks_to_insert: list[tuple[str, int, str, int]] = []
+        # Construimos los fragmentos finales: (product_id, rating, texto,
+        # chunk_index, review_group_id). Cada reseña PARSEADA (no cada
+        # fragmento) recibe un review_group_id único (UUID) que comparten
+        # todos sus sub-fragmentos — esto es lo que permite distinguir dos
+        # reseñas distintas del mismo product_id al reconstruir contexto.
+        chunks_to_insert: list[tuple[str, int, str, int, str]] = []
 
         for review in parsed_reviews:
-            header = f"Producto: {review.product_name} ({review.product_id}). Reseña: "
-            
-            if len(header) + len(review.text) > MAX_REVIEW_CHUNK_CHARS:
-                sub_texts = review_sub_splitter.split_text(review.text)
-                
-                for idx, sub_text in enumerate(sub_texts):
-                    enriched_sub_chunk = f"{header}{sub_text}"
-                    chunks_to_insert.append((review.product_id, review.rating, enriched_sub_chunk, idx))
-            else:
-                enriched_text = f"{header}{review.text}"
-                chunks_to_insert.append((review.product_id, review.rating, enriched_text, 0))
+            group_id = str(uuid.uuid4())
+            base_header = f"Producto: {review.product_name} ({review.product_id}). Reseña"
+            simple_text = f"{base_header}: {review.text}"
 
-        # PROCESAMIENTO EN LOTES (Concurrente) PARA LOS EMBEDDINGS
-        async def process_chunk(product_id, rating, text, chunk_index):
+            if len(simple_text) <= MAX_REVIEW_CHUNK_CHARS:
+                chunks_to_insert.append((review.product_id, review.rating, simple_text, 0, group_id))
+                continue
+
+            available_body_size = max(
+                MAX_REVIEW_CHUNK_CHARS - len(base_header) - RESERVED_PART_LABEL_CHARS,
+                MIN_BODY_CHUNK_SIZE,
+            )
+
+            local_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=available_body_size,
+                chunk_overlap=min(100, available_body_size // 4),
+            )
+            sub_texts = local_splitter.split_text(review.text)
+            total_parts = len(sub_texts)
+
+            for idx, sub_text in enumerate(sub_texts):
+                enriched_sub_chunk = f"{base_header} (parte {idx + 1}/{total_parts}): {sub_text}"
+                chunks_to_insert.append((review.product_id, review.rating, enriched_sub_chunk, idx, group_id))
+
+        # Procesamiento secuencial de embeddings (una llamada a la vez).
+        new_reviews = []
+        for product_id, rating, text, chunk_index, group_id in chunks_to_insert:
             vector = await asyncio.to_thread(get_embedding, text)
-            return models.Review(
+
+            review_entry = models.Review(
                 product_id=product_id,
                 rating=rating,
                 review_text=text,
                 embedding=vector,
                 chunk_index=chunk_index,
+                review_group_id=group_id,
             )
-
-        new_reviews = []
-        batch_size = 10  # Lote de 10 peticiones a la API a la vez
-
-        for i in range(0, len(chunks_to_insert), batch_size):
-            batch = chunks_to_insert[i:i+batch_size]
-            
-            tasks = [
-                process_chunk(pid, rat, txt, idx) 
-                for pid, rat, txt, idx in batch
-            ]
-            
-            # Recolectar embeddings del lote de forma concurrente
-            batch_results = await asyncio.gather(*tasks)
-            new_reviews.extend(batch_results)
+            new_reviews.append(review_entry)
 
         db.add_all(new_reviews)
         await db.commit()
