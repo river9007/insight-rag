@@ -17,8 +17,17 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (file.type !== 'application/pdf') {
-      setStatusMessage('Por favor, selecciona un archivo PDF válido.');
+    const validTypes = [
+      'application/pdf', 
+      'text/csv', 
+      'text/plain',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel'
+    ];
+    
+    // Algunos navegadores dejan el type vacío para CSV o TXT, por lo que validamos también las extensiones
+    if (!validTypes.includes(file.type) && !file.name.endsWith('.csv') && !file.name.endsWith('.txt')) {
+      setStatusMessage('Por favor, selecciona un archivo PDF, CSV, Excel o TXT válido.');
       return;
     }
 
@@ -68,12 +77,12 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
           <UploadCloud className="w-8 h-8 text-gray-400 mb-2" />
         )}
         <span className="text-sm font-medium text-gray-600">
-          {isUploading ? 'Vectorizando documento...' : 'Haz clic para subir feedback (PDF)'}
+          {isUploading ? 'Procesando documento...' : 'Haz clic para subir feedback (PDF, CSV, Excel, TXT)'}
         </span>
         <input
           type="file"
           className="hidden"
-          accept=".pdf"
+          accept=".pdf,.csv,.txt,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
           onChange={handleFileUpload}
           disabled={isUploading}
         />

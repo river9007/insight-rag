@@ -1,3 +1,4 @@
+import pandas as pd
 import io
 import re
 import uuid
@@ -359,34 +360,67 @@ async def get_metrics(
         "filtered_by": product_id,
     }
 
-# 5. ENDPOINT: Ingesta de Documentos PDF (Protegido)
+# 5. ENDPOINT: Ingesta de Documentos (PDF, CSV, Excel, TXT) (Protegido)
 @app.post("/ingest")
 async def ingest_document(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Por ahora, solo soportamos archivos PDF.")
-
     try:
-        file_content = await file.read()
+        # 1. Leer el archivo en memoria
+        content = await file.read()
+        filename = file.filename.lower()
+        
+        if len(content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="El archivo es demasiado grande. Máximo 10MB permitido.")
 
-        if len(file_content) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="El PDF es demasiado grande. Máximo 10MB permitido.")
+        raw_text = ""
+        
+        # 2. Lógica condicional según tipo de archivo
+        if filename.endswith('.pdf'):
+            pdf_reader = pypdf.PdfReader(io.BytesIO(content))
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    raw_text += page_text + "\n"
+                    
+        elif filename.endswith('.csv'):
+            # Manejo robusto de codificación y detección automática de separador (coma o punto y coma)
+            try:
+                df = pd.read_csv(io.BytesIO(content), encoding='utf-8', sep=None, engine='python')
+            except UnicodeDecodeError:
+                df = pd.read_csv(io.BytesIO(content), encoding='latin-1', sep=None, engine='python')
+                
+            # Unir columnas con formato 'Columna: Valor' y separar filas con saltos de línea
+            rows = []
+            for _, row in df.iterrows():
+                row_str = " ".join(f"{col.strip()}: {str(val).strip()}" for col, val in row.items() if pd.notna(val))
+                rows.append(row_str)
+            raw_text = "\n\n".join(rows)
+            
+        elif filename.endswith(('.xls', '.xlsx')):
+            # Leer Excel con pandas
+            df = pd.read_excel(io.BytesIO(content))
+            
+            # Unir columnas con formato 'Columna: Valor' y separar filas con saltos de línea
+            rows = []
+            for _, row in df.iterrows():
+                row_str = " ".join(f"{col}: {str(val).strip()}" for col, val in row.items() if pd.notna(val))
+                rows.append(row_str)
+            raw_text = "\n\n".join(rows)
 
-        pdf_reader = pypdf.PdfReader(io.BytesIO(file_content))
+        elif filename.endswith('.txt'):
+            # Decodificar texto plano directamente con tolerancia a errores
+            raw_text = content.decode('utf-8', errors='ignore')
+            
+        else:
+            raise HTTPException(status_code=400, detail="Formato de archivo no soportado. Usa PDF, CSV, Excel o TXT.")
 
-        extracted_text = ""
-        for page in pdf_reader.pages:
-            text = page.extract_text()
-            if text:
-                extracted_text += text + "\n"
+        if not raw_text.strip():
+            raise HTTPException(status_code=400, detail="El archivo está vacío o no se pudo extraer texto del documento.")
 
-        if not extracted_text.strip():
-            raise HTTPException(status_code=400, detail="El PDF está vacío o no se pudo extraer el texto.")
-
-        parsed_reviews = parse_reviews(extracted_text)
+        parsed_reviews = parse_reviews(raw_text)
 
         if not parsed_reviews:
             raise HTTPException(

@@ -14,8 +14,10 @@ pgvector==0.5.0
 # Cabe holgadamente en el free tier de Render (512MB RAM)
 fastembed>=0.3.6
 
-# ── Procesamiento de PDFs ───────────────────────────────────────────────────────
+# ── Procesamiento de PDFs y Datos ──────────────────────────────────────────────
 pypdf==6.14.2
+pandas>=2.2.0
+openpyxl>=3.1.0
 
 # ── LLM: Groq + LangChain (solo paquetes realmente importados) ─────────────────
 groq==0.37.1
