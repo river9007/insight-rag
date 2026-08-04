@@ -1,4 +1,3 @@
-# Archivo: backend/review_parser.py
 import re
 from dataclasses import dataclass
 from typing import List
@@ -11,13 +10,10 @@ class ParsedReview:
     text: str
 
 # Reconoce bloques con las 3 etiquetas: "ID de Producto", "Rating", "Reseña".
-# re.IGNORECASE + \s* flexible: tolera variaciones de mayúsculas y espacios/saltos
-# de línea (comunes al extraer texto de PDF), pero requiere estas etiquetas
-# exactas. Un formato con etiquetas distintas (ej. en inglés) necesitaría un
-# patrón adicional — no se intenta adivinar formatos que aún no se han visto.
+# Soporta IDs alfanuméricos como PROD-AUDIO-01 o PROD-1234
 REVIEW_PATTERN = re.compile(
-    r"ID\s+de\s+Producto\s*:\s*(?P<product_id>PROD-\d+)\s*"
-    r"\(\s*(?P<product_name>[^)]+?)\s*\)\s*"
+    r"ID\s+de\s+Producto\s*:\s*(?P<product_id>PROD-[A-Z0-9_-]+)\s*"
+    r"(?:\(\s*(?P<product_name>[^)]+?)\s*\)\s*)?"
     r"Rating\s*:\s*(?P<rating>\d+)\s*"
     r"Rese[ñn]a\s*:\s*(?P<text>.*?)"
     r"(?=ID\s+de\s+Producto\s*:|\Z)",
@@ -26,22 +22,21 @@ REVIEW_PATTERN = re.compile(
 
 def parse_reviews(full_text: str) -> List[ParsedReview]:
     """
-    Extrae reseñas individuales de un texto con el formato:
-    'ID de Producto: PROD-XXXX (Nombre) Rating: N Reseña: texto...'
-
-    Devuelve una lista vacía si el texto no contiene ningún bloque
-    reconocible — el llamador decide qué hacer en ese caso.
+    Extrae reseñas individuales de texto no estructurado (PDF / TXT).
     """
     reviews = []
     for match in REVIEW_PATTERN.finditer(full_text):
         raw_text = match.group("text").strip()
-        # Normaliza saltos de línea y espacios múltiples que deja pypdf
         clean_text = re.sub(r"\s+", " ", raw_text)
+
+        p_id = match.group("product_id").strip()
+        p_name = match.group("product_name")
+        p_name = p_name.strip() if p_name else p_id
 
         reviews.append(
             ParsedReview(
-                product_id=match.group("product_id").strip(),
-                product_name=match.group("product_name").strip(),
+                product_id=p_id,
+                product_name=p_name,
                 rating=int(match.group("rating")),
                 text=clean_text,
             )
