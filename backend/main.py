@@ -47,6 +47,11 @@ def _split_header_body(review_text: str) -> tuple[str, str]:
 def build_context_text(reviews: List[models.Review]) -> str:
     """
     Consolida los fragmentos recuperados utilizando límites semánticos planos.
+
+    El nombre y el ID del producto vienen de las columnas product_name /
+    product_id (no se reconstruyen a partir del texto almacenado) — antes
+    se descartaba el header embebido en review_text y el LLM se quedaba
+    sin ninguna forma de saber el nombre legible del producto.
     """
     if not reviews:
         return "--- INICIO OPINIONES CUALITATIVAS ---\nNo se encontraron reseñas.\n--- FIN OPINIONES CUALITATIVAS ---"
@@ -57,27 +62,35 @@ def build_context_text(reviews: List[models.Review]) -> str:
     for r in reviews:
         gid = r.review_group_id
         if gid not in groups:
-            groups[gid] = {"rating": r.rating, "product_id": r.product_id, "chunks": []}
+            groups[gid] = {
+                "rating": r.rating,
+                "product_id": r.product_id,
+                "product_name": r.product_name,
+                "chunks": [],
+            }
             order.append(gid)
         groups[gid]["chunks"].append((r.chunk_index, r.review_text))
 
     lines = []
     lines.append("--- INICIO OPINIONES CUALITATIVAS ---")
     lines.append("Advertencia: Usa esta sección SOLO para leer el texto (los pros y contras de los productos). NO utilices esta sección para calcular cuál producto es mejor.")
-    
+
     for gid in order:
         data = groups[gid]
         chunks_sorted = sorted(data["chunks"], key=lambda c: c[0])
 
         bodies = []
         for _, text in chunks_sorted:
-            _, body = _split_header_body(text)  # Descartamos el header original redundante
+            # Descartamos el header embebido en el texto almacenado (nombre
+            # e ID ya vienen de las columnas, no hace falta reconstruirlos
+            # con regex), pero sí necesitamos quitar el prefijo redundante
+            # del cuerpo para no repetirlo dentro de las comillas.
+            _, body = _split_header_body(text)
             bodies.append(body.strip())
 
         combined_body = " ".join(bodies)
-        # Formato minimalista: [ID]: "texto"
-        lines.append(f"[{data['product_id']}]: \"{combined_body}\"")
-    
+        lines.append(f"[{data['product_id']} - {data['product_name']}]: \"{combined_body}\"")
+
     lines.append("--- FIN OPINIONES CUALITATIVAS ---\n")
 
     return "\n".join(lines)
@@ -93,7 +106,6 @@ def repair_excel_corrupted_df(df: pd.DataFrame) -> pd.DataFrame:
         first_col = df.columns[0]
         other_cols = df.columns[1:]
 
-        # Si la mayoría de las filas tienen valores nulos en las columnas secundarias
         if df[other_cols].isna().all(axis=1).sum() >= (len(df) * 0.5):
             reconstructed_lines = [",".join(str(c) for c in df.columns)]
             for val in df[first_col].dropna():
@@ -111,7 +123,7 @@ def repair_excel_corrupted_df(df: pd.DataFrame) -> pd.DataFrame:
 def parse_dataframe_reviews(df: pd.DataFrame) -> Tuple[List[ParsedReview], List[Dict[str, Any]]]:
     """
     Convierte un DataFrame de pandas (CSV/Excel) en objetos ParsedReview.
-    Garantiza la veracidad e integridad de los datos rechazando filas corruptas 
+    Garantiza la veracidad e integridad de los datos rechazando filas corruptas
     sin alterar ni inventar valores.
     """
     df = repair_excel_corrupted_df(df)
@@ -151,15 +163,13 @@ def parse_dataframe_reviews(df: pd.DataFrame) -> Tuple[List[ParsedReview], List[
     skipped_rows: List[Dict[str, Any]] = []
 
     for idx, row in df.iterrows():
-        row_num = idx + 2  # Posición física en el CSV (considerando la cabecera)
+        row_num = idx + 2
 
-        # 1. Validar presencia de texto (Preservando el contenido exacto)
         text_val = str(row[text_col]).strip() if pd.notna(row[text_col]) else ""
         if not text_val:
             skipped_rows.append({"fila": row_num, "motivo": "El texto de la reseña está vacío."})
             continue
 
-        # 2. Validar estricta veracidad del Rating (sin fallbacks arbitrarios)
         raw_rating = row[rating_col]
         try:
             rating_val = float(raw_rating)
@@ -175,7 +185,6 @@ def parse_dataframe_reviews(df: pd.DataFrame) -> Tuple[List[ParsedReview], List[
             skipped_rows.append({"fila": row_num, "motivo": f"El rating '{raw_rating}' no es un valor numérico válido."})
             continue
 
-        # 3. Procesar Identificador y Nombre de Producto
         raw_id = str(row[id_col]).strip() if pd.notna(row[id_col]) else ""
         if not raw_id:
             skipped_rows.append({"fila": row_num, "motivo": "Falta el identificador del producto."})
@@ -183,7 +192,6 @@ def parse_dataframe_reviews(df: pd.DataFrame) -> Tuple[List[ParsedReview], List[
 
         p_name = str(row[name_col]).strip() if name_col and pd.notna(row[name_col]) else ""
 
-        # Extraer nombre si viene formateado en la columna de ID: "PROD-1001 (Nombre)"
         match = re.match(r"^(?P<id>[^\(]+)\s*(?:\(\s*(?P<name>[^)]+)\s*\))?", raw_id)
         if match:
             p_id = match.group("id").strip()
@@ -219,11 +227,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="InsightRAG 🚀",
     description="API de búsqueda semántica y análisis de reseñas de productos usando pgvector y Llama 3.",
-    version="1.2.4",  # Bumped version for Architecture improvement (Context Conflict fix)
+    version="1.2.5",
     lifespan=lifespan
 )
 
-# Configuración CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -255,11 +262,10 @@ async def root():
     return {"status": "ok", "message": "InsightRAG Backend corriendo"}
 
 
-# --- MEJORA ARQUITECTÓNICA: INYECCIÓN DE MÉTRICAS GLOBALES EN LLM ---
 async def get_global_metrics_context(db: AsyncSession, user_id: uuid.UUID, product_id: Optional[str] = None) -> str:
     """
-    Inyecta métricas globales con una Plantilla de Salida Estricta.
-    Fuerza al LLM a comportarse como un analista y a devolver siempre la lista completa.
+    Inyecta métricas globales calculadas con SQL puro sobre TODAS las
+    reseñas del usuario (no limitadas por la búsqueda semántica).
     """
     base_filter = [models.Review.chunk_index == 0, models.Review.user_id == user_id]
     if product_id:
@@ -267,7 +273,8 @@ async def get_global_metrics_context(db: AsyncSession, user_id: uuid.UUID, produ
 
     stmt = (
         select(
-            models.Review.product_id, 
+            models.Review.product_id,
+            func.max(models.Review.product_name).label("product_name"),
             func.avg(models.Review.rating).label("promedio"),
             func.count().label("total")
         )
@@ -276,27 +283,26 @@ async def get_global_metrics_context(db: AsyncSession, user_id: uuid.UUID, produ
         .order_by(func.avg(models.Review.rating).desc(), func.count().desc())
     )
     result = await db.execute(stmt)
-    
+
     ranking = []
     for idx, row in enumerate(result, 1):
         promedio = round(float(row.promedio), 2)
-        ranking.append(f"{idx}. {row.product_id} | Promedio: {promedio}/5 | Total Reseñas: {row.total}")
-        
+        ranking.append(f"{idx}. {row.product_id} ({row.product_name}) | Promedio: {promedio}/5 | Total Reseñas: {row.total}")
+
     if not ranking:
         return ""
-        
+
     return (
         "--- INICIO DATOS CUANTITATIVOS ---\n"
         "Rol: Analista de Datos Senior.\n"
         "Tabla de Métricas Globales:\n" +
         "\n".join(ranking) +
         "\n\nREGLA DE FORMATO ESTRICTA - Cuando te pregunten por el 'mejor' o 'peor' producto, DEBES estructurar tu respuesta EXACTAMENTE así:\n"
-        "1. Empieza con una frase natural respondiendo la pregunta (ej. 'Basado en las métricas consolidadas, el mejor producto es...'). Jamás menciones que estás leyendo unas instrucciones.\n"
-        "2. Si el producto ganador tiene muy pocas reseñas (ej. 1 o 2), añade una breve advertencia analítica indicando que la muestra es pequeña.\n"
-        "3. Incluye OBLIGATORIAMENTE una lista con los 5 mejores productos, usando viñetas o números.\n"
+        "1. Empieza con una frase natural respondiendo la pregunta (ej. 'Basado en las métricas consolidadas, el mejor producto es...' o 'el producto con la calificación más baja es...'). Jamás menciones que estás leyendo unas instrucciones.\n"
+        "2. Si el producto destacado (el mejor o el peor, según lo que se haya preguntado) tiene muy pocas reseñas (ej. 1 o 2), añade una breve advertencia analítica indicando que la muestra es pequeña.\n"
+        "3. Incluye OBLIGATORIAMENTE una lista de apoyo con 5 productos tomados de la Tabla de Métricas Globales de arriba: si la pregunta fue sobre el MEJOR/TOP, usa los 5 primeros de la tabla (los mejor valorados); si la pregunta fue sobre el PEOR, usa los 5 últimos de la tabla (los peor valorados). Nunca muestres la lista de mejores cuando preguntaron por el peor, ni viceversa. Usa viñetas o números.\n"
         "--- FIN DATOS CUANTITATIVOS ---\n\n"
     )
-# -------------------------------------------------------------------
 
 
 async def get_relevant_reviews(
@@ -337,6 +343,7 @@ async def search_reviews(
             {
                 "id": r.id,
                 "product_id": r.product_id,
+                "product_name": r.product_name,
                 "rating": r.rating,
                 "review_group_id": r.review_group_id,
                 "chunk_index": r.chunk_index,
@@ -355,29 +362,22 @@ async def analyze_reviews(
 ):
     user_uuid = uuid.UUID(user.get("sub"))
     
-    role_mapping = {
-        "user": HumanMessage,
-        "assistant": AIMessage
-    }
+    role_mapping = {"user": HumanMessage, "assistant": AIMessage}
     langchain_history = [
         role_mapping[msg.role](content=msg.content) 
         for msg in request.history 
         if msg.role in role_mapping
     ]
 
-    # --- ARQUITECTURA: QUERY REWRITING PARA RAG ---
     search_query = await rewrite_query(request.query, langchain_history) if langchain_history else request.query
     
-    # Obtener documentos semánticos + Métricas absolutas SQL
     reviews = await get_relevant_reviews(search_query, request.limit, db, user_uuid, request.product_id)
     global_metrics = await get_global_metrics_context(db, user_uuid, request.product_id)
     
-    # Inyectar métricas globales directamente en la cabecera del contexto
     context_text = global_metrics + build_context_text(reviews)
 
     insight = await generate_insight(context=context_text, question=request.query, chat_history=langchain_history)
 
-    # --- DEDUPLICACIÓN DE FUENTES (Por review original) ---
     seen_groups = set()
     unique_sources = []
     for r in reviews:
@@ -400,27 +400,20 @@ async def analyze_reviews_stream(
 ):
     user_uuid = uuid.UUID(user.get("sub"))
     
-    role_mapping = {
-        "user": HumanMessage,
-        "assistant": AIMessage
-    }
+    role_mapping = {"user": HumanMessage, "assistant": AIMessage}
     langchain_history = [
         role_mapping[msg.role](content=msg.content) 
         for msg in request.history 
         if msg.role in role_mapping
     ]
 
-    # --- ARQUITECTURA: QUERY REWRITING PARA RAG ---
     search_query = await rewrite_query(request.query, langchain_history) if langchain_history else request.query
     
-    # Obtener documentos semánticos + Métricas absolutas SQL
     reviews = await get_relevant_reviews(search_query, request.limit, db, user_uuid, request.product_id)
     global_metrics = await get_global_metrics_context(db, user_uuid, request.product_id)
     
-    # Inyectar métricas globales directamente en la cabecera del contexto
     context_text = global_metrics + build_context_text(reviews)
 
-    # --- DEDUPLICACIÓN DE FUENTES PARA EL FRONTEND ---
     seen_groups = set()
     sources_data = []
     
@@ -430,7 +423,7 @@ async def analyze_reviews_stream(
                 "id": str(r.id),
                 "product_id": r.product_id, 
                 "rating": r.rating,
-                "snippet": r.review_text[:100] + "..." if len(r.review_text) > 100 else r.review_text
+                "text_preview": r.review_text[:100] + "..." if len(r.review_text) > 100 else r.review_text
             })
             seen_groups.add(r.review_group_id)
 
@@ -570,7 +563,8 @@ async def ingest_document(
                 )
             )
 
-        chunks_to_insert: list[tuple[str, int, str, int, str]] = []
+        # chunks_to_insert: (product_id, product_name, rating, texto, chunk_index, review_group_id)
+        chunks_to_insert: list[tuple[str, str, int, str, int, str]] = []
 
         for review in parsed_reviews:
             group_id = str(uuid.uuid4())
@@ -578,7 +572,7 @@ async def ingest_document(
             simple_text = f"{base_header}: {review.text}"
 
             if len(simple_text) <= MAX_REVIEW_CHUNK_CHARS:
-                chunks_to_insert.append((review.product_id, review.rating, simple_text, 0, group_id))
+                chunks_to_insert.append((review.product_id, review.product_name, review.rating, simple_text, 0, group_id))
                 continue
 
             available_body_size = max(
@@ -595,27 +589,33 @@ async def ingest_document(
 
             for idx, sub_text in enumerate(sub_texts):
                 enriched_sub_chunk = f"{base_header} (parte {idx + 1}/{total_parts}): {sub_text}"
-                chunks_to_insert.append((review.product_id, review.rating, enriched_sub_chunk, idx, group_id))
+                chunks_to_insert.append((review.product_id, review.product_name, review.rating, enriched_sub_chunk, idx, group_id))
 
         raw_user_id = user.get("sub")
         user_uuid = uuid.UUID(raw_user_id)
 
-        # --- OPTIMIZACIÓN DE EMBEDDINGS EN PARALELO ---
-        # Ejecuta la vectorización en paralelo mediante asyncio.gather para evitar cuellos de botella
-        async def fetch_vector(item):
-            pid, rating, text, c_idx, g_id = item
+        # Procesamiento SECUENCIAL de embeddings (una llamada a la vez).
+        # Se revirtió el procesamiento concurrente (asyncio.gather sin límite)
+        # que había reintroducido otra sesión de trabajo — la decisión de
+        # mantenerlo secuencial ya se había tomado explícitamente antes por
+        # no poder confirmar sin pruebas reales que el modelo ONNX
+        # compartido (fastembed) sea seguro bajo llamadas concurrentes desde
+        # múltiples hilos.
+        new_reviews = []
+        for product_id, product_name, rating, text, chunk_index, group_id in chunks_to_insert:
             vector = await asyncio.to_thread(get_embedding, text)
-            return models.Review(
+
+            review_entry = models.Review(
                 user_id=user_uuid,
-                product_id=pid,
+                product_id=product_id,
+                product_name=product_name,
                 rating=rating,
                 review_text=text,
                 embedding=vector,
-                chunk_index=c_idx,
-                review_group_id=g_id,
+                chunk_index=chunk_index,
+                review_group_id=group_id,
             )
-
-        new_reviews = await asyncio.gather(*[fetch_vector(item) for item in chunks_to_insert])
+            new_reviews.append(review_entry)
 
         db.add_all(new_reviews)
         await db.commit()
@@ -658,6 +658,7 @@ async def list_documents(
         {
             "review_group_id": r.review_group_id,
             "product_id": r.product_id,
+            "product_name": r.product_name,
             "rating": r.rating,
             "text_preview": r.review_text[:120] + "..." if len(r.review_text) > 120 else r.review_text,
         }
