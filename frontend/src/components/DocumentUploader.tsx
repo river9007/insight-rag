@@ -30,6 +30,7 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
   const [result, setResult] = useState<IngestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState<boolean>(false);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
 
   // Función para generar y descargar la plantilla CSV de referencia
   const downloadTemplate = () => {
@@ -53,6 +54,41 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
       setFile(e.target.files[0]);
       setResult(null);
       setError(null);
+    }
+  };
+
+  // Handlers para la funcionalidad de Drag & Drop
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!loading) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (loading) return;
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const droppedFile = e.dataTransfer.files[0];
+      const validExtensions = ['.csv', '.xlsx', '.xls', '.pdf', '.txt'];
+      const fileExtension = '.' + droppedFile.name.split('.').pop()?.toLowerCase();
+
+      if (validExtensions.includes(fileExtension)) {
+        setFile(droppedFile);
+        setResult(null);
+        setError(null);
+      } else {
+        setError('Formato de archivo no soportado. Usa CSV, Excel (.xlsx), PDF o TXT.');
+      }
     }
   };
 
@@ -111,8 +147,17 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
         </button>
       </div>
 
-      {/* Zona de Selección de Archivo */}
-      <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-6 text-center hover:border-indigo-500 transition-colors bg-slate-50/50 dark:bg-slate-800/30">
+      {/* Zona de Selección y Soltado de Archivo */}
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`border-2 border-dashed rounded-xl p-6 text-center transition-all ${
+          isDragging
+            ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/20 scale-[1.005]'
+            : 'border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30 hover:border-indigo-400'
+        }`}
+      >
         <input
           type="file"
           accept=".csv,.xlsx,.xls,.pdf,.txt"
@@ -125,10 +170,10 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
           {loading ? (
             <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mb-2" />
           ) : (
-            <UploadCloud className="w-8 h-8 text-slate-400 mb-2" />
+            <UploadCloud className={`w-8 h-8 mb-2 transition-colors ${isDragging ? 'text-indigo-600' : 'text-slate-400'}`} />
           )}
           <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-            {file ? file.name : 'Haz clic para seleccionar o arrastra un archivo'}
+            {file ? file.name : isDragging ? '¡Suelta el archivo aquí!' : 'Haz clic para seleccionar o arrastra un archivo'}
           </span>
           <span className="text-xs text-slate-500 mt-1">
             Soporta CSV, Excel (.xlsx), PDF y TXT (Máx. 10MB)
