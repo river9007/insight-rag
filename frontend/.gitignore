@@ -39,3 +39,23 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ==========================================
+# Python & Entornos Virtuales
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# ==========================================
+# InsightRAG: Modelos Pesados & Archivos Locales
+# ==========================================
+onnx_reranker_fp32/
+onnx_reranker_int8/
+*.onnx
+export_reranker.py
+backend/export_reranker.py
+estructura.txt

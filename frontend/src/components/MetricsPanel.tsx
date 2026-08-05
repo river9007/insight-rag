@@ -1,16 +1,18 @@
-// Archivo: frontend/src/components/MetricsPanel.tsx
 "use client";
 
 import { useCallback, useEffect, useState } from 'react';
 import {
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
   Cell,
+  Legend,
 } from 'recharts';
 import { Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
@@ -20,17 +22,23 @@ interface DistributionItem {
   cantidad: number;
 }
 
+// 👈 Ajustado para coincidir exactamente con las llaves que devuelve FastAPI
+interface TimeseriesItem {
+  fecha: string;
+  promedio: number;
+  cantidad: number;
+}
+
 interface MetricsData {
   total_resenas: number;
   promedio: number;
   alertas: number;
   distribution: DistributionItem[];
+  timeseries?: TimeseriesItem[]; // 👈 Renombrado de timeline a timeseries
   available_products: string[];
   filtered_by: string | null;
 }
 
-// Colores fijos por calificación — consistentes sin importar el orden
-// en que el backend devuelva la distribución.
 const RATING_COLORS: Record<number, string> = {
   5: '#22c55e',
   4: '#84cc16',
@@ -40,8 +48,6 @@ const RATING_COLORS: Record<number, string> = {
 };
 
 interface MetricsPanelProps {
-  // Incrementar este valor desde el componente padre fuerza un refetch
-  // (se usa tras un ingest exitoso en DocumentUploader).
   refreshTrigger?: number;
 }
 
@@ -83,13 +89,10 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
     }
   }, [selectedProduct]);
 
-  // Se re-ejecuta cuando cambia el producto seleccionado O cuando el padre
-  // incrementa refreshTrigger tras un ingest exitoso.
   useEffect(() => {
     fetchMetrics();
   }, [fetchMetrics, refreshTrigger]);
 
-  // ── Estado: cargando por primera vez ──
   if (isLoading && !data) {
     return (
       <div className="flex items-center justify-center h-40 gap-2 text-gray-400">
@@ -99,7 +102,6 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
     );
   }
 
-  // ── Estado: error ──
   if (error) {
     return (
       <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-4">
@@ -108,7 +110,6 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
     );
   }
 
-  // ── Estado: sin datos aún ──
   if (!data || data.total_resenas === 0) {
     return (
       <div className="flex flex-col gap-4">
@@ -131,7 +132,6 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
 
   return (
     <div className="w-full flex flex-col gap-6">
-
       {/* Filtro por producto */}
       {data.available_products.length > 0 && (
         <ProductFilter
@@ -157,6 +157,74 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
           <p className="text-2xl font-bold text-slate-800">{data.alertas}</p>
         </div>
       </div>
+
+      {/* Gráfico de Tendencia Temporal (Eje X = Fecha, Eje Y = Calificación / Volumen) */}
+      {/* 👈 Modificamos la validación para usar data.timeseries */}
+      {data.timeseries && data.timeseries.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold text-gray-500 mb-3">
+            Evolución Temporal de Calificaciones
+          </h3>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart
+              data={data.timeseries}
+              margin={{ top: 10, right: 30, left: 0, bottom: 5 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis
+                dataKey="fecha" // 👈 Alineado al JSON de FastAPI
+                fontSize={12}
+                tickLine={false}
+                stroke="#64748b"
+              />
+              <YAxis
+                yAxisId="left"
+                domain={[1, 5]}
+                fontSize={12}
+                tickLine={false}
+                stroke="#22c55e"
+              />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                fontSize={12}
+                tickLine={false}
+                stroke="#3b82f6"
+                allowDecimals={false}
+              />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#ffffff', borderRadius: '8px', borderColor: '#e2e8f0' }}
+                formatter={(value: any, name: any) => [
+                  name === 'Promedio' ? `${value} ★` : `${value} reseñas`,
+                  name
+                ]}
+              />
+              <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />
+              <Line
+                yAxisId="left"
+                type="monotone"
+                dataKey="promedio"
+                name="Promedio"
+                stroke="#22c55e"
+                strokeWidth={2}
+                dot={{ r: 4, fill: '#22c55e' }}
+                activeDot={{ r: 6 }}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="cantidad" // 👈 Alineado al JSON de FastAPI
+                name="Total Reseñas"
+                stroke="#3b82f6"
+                strokeWidth={2}
+                strokeDasharray="4 4"
+                dot={{ r: 4, fill: '#3b82f6' }}
+                activeDot={{ r: 6 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* Gráfico de Barras */}
       <div>
@@ -195,13 +263,10 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
           </BarChart>
         </ResponsiveContainer>
       </div>
-
     </div>
   );
 }
 
-// Sub-componente del selector de producto — evita duplicar el JSX
-// entre el estado "sin datos" y el estado normal.
 function ProductFilter({
   products,
   selected,

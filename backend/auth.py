@@ -25,7 +25,8 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Security(securi
             token,
             signing_key.key,
             algorithms=["ES256", "RS256", "HS256"],
-            audience="authenticated"
+            audience="authenticated",
+            leeway=10  # 👈 Tolerancia de 10 segundos para el margen iat/nbf
         )
 
         if payload.get("role") != "authenticated":

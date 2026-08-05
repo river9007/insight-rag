@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "tailwind:init": "tailwindcss init -p",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -23,9 +24,11 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "autoprefixer": "^10.5.4",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
-    "tailwindcss": "^4",
+    "postcss": "^8.5.25",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5"
   },
   "allowScripts": {

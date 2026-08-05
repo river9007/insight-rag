@@ -49,7 +49,7 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* ── Columna Derecha: Chat RAG + Ingesta (1/3 del ancho) ── */}
+        {/* ── Columna Derecha: Contenedor con Ingesta e InsightChat (1/3 del ancho) ── */}
         <div>
           <ChatPanel onUploadSuccess={handleRefreshAll} />
         </div>

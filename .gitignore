@@ -27,3 +27,11 @@ node_modules/
 # ── Sistema operativo ──────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# ── Modelos pesados ONNX y scripts temporales ─────────────────────────────────
+onnx_reranker_fp32/
+onnx_reranker_int8/
+*.onnx
+export_reranker.py
+backend/export_reranker.py
+estructura.txt

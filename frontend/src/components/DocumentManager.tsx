@@ -21,7 +21,9 @@ export default function DocumentManager({ onRefreshMetrics, refreshTrigger }: Do
   const [loading, setLoading] = useState<boolean>(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState<boolean>(false);
-  const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
+  
+  // null = cerrado | 'ALL' = vaciar todo | '<id>' = borrar documento individual
+  const [targetToDelete, setTargetToDelete] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -74,6 +76,7 @@ export default function DocumentManager({ onRefreshMetrics, refreshTrigger }: Do
       if (!res.ok) throw new Error('No se pudo eliminar el documento.');
 
       setDocuments((prev) => prev.filter((doc) => doc.review_group_id !== review_group_id));
+      setTargetToDelete(null);
       if (onRefreshMetrics) onRefreshMetrics();
     } catch (err: any) {
       setError(err.message || 'Error al intentar eliminar el documento.');
@@ -99,7 +102,7 @@ export default function DocumentManager({ onRefreshMetrics, refreshTrigger }: Do
       if (!res.ok) throw new Error('No se pudo vaciar la base de conocimientos.');
 
       setDocuments([]);
-      setShowConfirmModal(false);
+      setTargetToDelete(null);
       if (onRefreshMetrics) onRefreshMetrics();
     } catch (err: any) {
       setError(err.message || 'Error al intentar vaciar los datos.');
@@ -107,6 +110,8 @@ export default function DocumentManager({ onRefreshMetrics, refreshTrigger }: Do
       setDeletingAll(false);
     }
   };
+
+  const isDeleting = deletingAll || deletingId !== null;
 
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
@@ -133,7 +138,7 @@ export default function DocumentManager({ onRefreshMetrics, refreshTrigger }: Do
 
           {documents.length > 0 && (
             <button
-              onClick={() => setShowConfirmModal(true)}
+              onClick={() => setTargetToDelete('ALL')}
               className="flex items-center gap-1.5 text-xs bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/60 font-medium px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800/50 transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -178,7 +183,7 @@ export default function DocumentManager({ onRefreshMetrics, refreshTrigger }: Do
               </div>
 
               <button
-                onClick={() => handleDeleteOne(doc.review_group_id)}
+                onClick={() => setTargetToDelete(doc.review_group_id)}
                 disabled={deletingId === doc.review_group_id}
                 className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors flex-shrink-0"
                 title="Eliminar este grupo/reseña"
@@ -194,39 +199,52 @@ export default function DocumentManager({ onRefreshMetrics, refreshTrigger }: Do
         </div>
       )}
 
-      {/* Modal de confirmación para Vaciar Todo */}
-      {showConfirmModal && (
+      {/* Modal UNIFICADO de confirmación */}
+      {targetToDelete !== null && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-xl">
             <div className="flex items-center gap-3 text-red-600 dark:text-red-400 mb-3">
               <AlertTriangle className="w-6 h-6 flex-shrink-0" />
               <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                ¿Vaciar base de conocimientos?
+                {targetToDelete === 'ALL'
+                  ? '¿Vaciar base de conocimientos?'
+                  : '¿Eliminar este documento?'}
               </h3>
             </div>
+            
             <p className="text-xs text-slate-600 dark:text-slate-300 mb-6 leading-relaxed">
-              Esta acción eliminará de forma permanente todos tus documentos y vectores asociados. No podrás recuperar esta información.
+              {targetToDelete === 'ALL'
+                ? 'Esta acción eliminará de forma permanente TODOS tus documentos y vectores asociados. No podrás recuperar esta información.'
+                : 'Esta acción eliminará de forma permanente este documento específico y sus vectores asociados de la base de datos.'}
             </p>
+
             <div className="flex justify-end gap-3">
               <button
-                onClick={() => setShowConfirmModal(false)}
-                disabled={deletingAll}
+                onClick={() => setTargetToDelete(null)}
+                disabled={isDeleting}
                 className="px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
               >
                 Cancelar
               </button>
+              
               <button
-                onClick={handleDeleteAll}
-                disabled={deletingAll}
+                onClick={() => {
+                  if (targetToDelete === 'ALL') {
+                    handleDeleteAll();
+                  } else {
+                    handleDeleteOne(targetToDelete);
+                  }
+                }}
+                disabled={isDeleting}
                 className="flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
               >
-                {deletingAll ? (
+                {isDeleting ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     Eliminando...
                   </>
                 ) : (
-                  'Sí, vaciar todo'
+                  targetToDelete === 'ALL' ? 'Sí, vaciar todo' : 'Sí, eliminar'
                 )}
               </button>
             </div>
