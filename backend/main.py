@@ -6,6 +6,7 @@ import re
 import uuid
 import asyncio
 import unicodedata
+from datetime import date
 from typing import Optional
 from collections import Counter
 from sqlalchemy import select, func
@@ -498,11 +499,14 @@ async def analyze_reviews_stream(
 @app.get("/metrics")
 async def get_metrics(
     product_id: Optional[str] = None,
+    start_date: Optional[date] = None,  # <- Cambiado de Optional[str] a Optional[date]
+    end_date: Optional[date] = None,    # <- Cambiado de Optional[str] a Optional[date]
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
     import json
     import re
+    from collections import Counter # Aprovecho de asegurar la importación de Counter
     
     raw_user_id = user.get("sub")
     user_uuid = uuid.UUID(raw_user_id)
@@ -512,7 +516,13 @@ async def get_metrics(
     if product_id:
         base_filter.append(models.Review.product_id == product_id)
 
-    # Productos disponibles para el selector
+    # Aplicar filtros de fecha si se proporcionan
+    if start_date:
+        base_filter.append(func.date(models.Review.created_at) >= start_date)
+    if end_date:
+        base_filter.append(func.date(models.Review.created_at) <= end_date)
+
+    # Productos disponibles para el selector (sin acotar por fecha para mantener la lista completa)
     prod_stmt = (
         select(func.distinct(models.Review.product_id))
         .where(models.Review.user_id == user_uuid)

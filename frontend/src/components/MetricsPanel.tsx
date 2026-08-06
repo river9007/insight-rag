@@ -81,6 +81,8 @@ interface MetricsPanelProps {
 
 export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) {
   const [selectedProduct, setSelectedProduct] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [data, setData] = useState<MetricsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -97,6 +99,12 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
       const url = new URL(`${API_URL}/metrics`);
       if (selectedProduct) {
         url.searchParams.set('product_id', selectedProduct);
+      }
+      if (startDate) {
+        url.searchParams.set('start_date', startDate);
+      }
+      if (endDate) {
+        url.searchParams.set('end_date', endDate);
       }
 
       const response = await fetch(url.toString(), {
@@ -115,7 +123,7 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
     } finally {
       setIsLoading(false);
     }
-  }, [selectedProduct]);
+  }, [selectedProduct, startDate, endDate]);
 
   useEffect(() => {
     fetchMetrics();
@@ -141,17 +149,47 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
   if (!data || data.total_resenas === 0) {
     return (
       <div className="flex flex-col gap-4">
-        {data && data.available_products.length > 0 && (
-          <ProductFilter
-            products={data.available_products}
-            selected={selectedProduct}
-            onChange={setSelectedProduct}
-            isLoading={isLoading}
-          />
-        )}
+        <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-3 border border-gray-200 rounded-lg shadow-sm">
+          {(data?.available_products?.length ?? 0) > 0 && (
+            <ProductFilter
+              products={data?.available_products || []}
+              selected={selectedProduct}
+              onChange={setSelectedProduct}
+              isLoading={isLoading}
+            />
+          )}
+
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500 font-medium">Desde:</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="text-sm border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-500 font-medium">Hasta:</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="text-sm border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {(startDate || endDate) && (
+              <button
+                onClick={() => {
+                  setStartDate('');
+                  setEndDate('');
+                }}
+                className="text-xs text-blue-600 hover:underline ml-1 font-medium"
+              >
+                Limpiar fechas
+              </button>
+            )}
+          </div>
+        </div>
         <div className="text-center text-gray-400 text-sm py-10">
-          {selectedProduct
-            ? `No hay reseñas para "${selectedProduct}" todavía.`
+          {selectedProduct || startDate || endDate
+            ? 'No hay reseñas con los filtros seleccionados.'
             : 'Aún no hay reseñas ingeridas. Sube un PDF para comenzar.'}
         </div>
       </div>
@@ -168,15 +206,45 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
 
   return (
     <div className="w-full flex flex-col gap-6">
-      {/* Filtro por producto */}
-      {(data?.available_products?.length ?? 0) > 0 && (
-        <ProductFilter
-          products={data.available_products}
-          selected={selectedProduct}
-          onChange={setSelectedProduct}
-          isLoading={isLoading}
-        />
-      )}
+      {/* Barra de Filtros (Producto + Fechas) */}
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-3 border border-gray-200 rounded-lg shadow-sm">
+        {(data?.available_products?.length ?? 0) > 0 && (
+          <ProductFilter
+            products={data?.available_products || []}
+            selected={selectedProduct}
+            onChange={setSelectedProduct}
+            isLoading={isLoading}
+          />
+        )}
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500 font-medium">Desde:</span>
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="text-sm border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <span className="text-sm text-gray-500 font-medium">Hasta:</span>
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="text-sm border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          {(startDate || endDate) && (
+            <button
+              onClick={() => {
+                setStartDate('');
+                setEndDate('');
+              }}
+              className="text-xs text-blue-600 hover:underline ml-1 font-medium"
+            >
+              Limpiar fechas
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* KPIs Principales */}
       <div className="grid grid-cols-3 gap-4">
