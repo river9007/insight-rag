@@ -1,3 +1,4 @@
+// Archivo: components/ChatPanel.tsx
 "use client";
 
 import DocumentUploader from './DocumentUploader';

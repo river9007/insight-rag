@@ -8,12 +8,15 @@ import { Lock, Mail, Loader2, LogOut, CheckCircle } from 'lucide-react';
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
   const [email, setEmail] = useState('');
   const [magicLinkSent, setMagicLinkSent] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isSending, setIsSending] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoading(false);
@@ -64,9 +67,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
   };
 
-  if (loading) {
+  // Previene el desajuste de hidratación esperando al montaje en el cliente
+  if (!mounted || loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50" suppressHydrationWarning>
         <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
       </div>
     );
@@ -74,8 +78,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   if (!session) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-        <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4" suppressHydrationWarning>
+        <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8" suppressHydrationWarning>
           <div className="text-center mb-8">
             <div className="bg-blue-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
               <Lock className="w-8 h-8 text-blue-600" />
@@ -145,7 +149,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50" suppressHydrationWarning>
       <header className="bg-white border-b border-gray-200 px-6 py-3 flex justify-between items-center">
         <span className="text-sm font-medium text-gray-600">
           Sesión activa como: <span className="text-black font-semibold">{session.user.email}</span>

@@ -1,3 +1,4 @@
+// Archivo: components/MetricsPanel.tsx
 "use client";
 
 import { useCallback, useEffect, useState } from 'react';
@@ -11,10 +12,12 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Cell,
   Legend,
+  PieChart,
+  Pie,
+  Cell,
 } from 'recharts';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Tag, ThumbsUp, MessageSquare, AlertTriangle } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 
 interface DistributionItem {
@@ -22,11 +25,27 @@ interface DistributionItem {
   cantidad: number;
 }
 
-// 👈 Ajustado para coincidir exactamente con las llaves que devuelve FastAPI
 interface TimeseriesItem {
   fecha: string;
   promedio: number;
   cantidad: number;
+}
+
+interface SentimentDistribution {
+  POSITIVE: number;
+  NEUTRAL: number;
+  NEGATIVE: number;
+}
+
+interface CategoryItem {
+  category: string;
+  count: number;
+  avg_rating: number;
+}
+
+interface AspectTagItem {
+  tag: string;
+  count: number;
 }
 
 interface MetricsData {
@@ -34,9 +53,12 @@ interface MetricsData {
   promedio: number;
   alertas: number;
   distribution: DistributionItem[];
-  timeseries?: TimeseriesItem[]; // 👈 Renombrado de timeline a timeseries
+  timeseries?: TimeseriesItem[];
   available_products: string[];
   filtered_by: string | null;
+  sentiment_distribution?: SentimentDistribution;
+  top_categories?: CategoryItem[];
+  top_aspect_tags?: AspectTagItem[];
 }
 
 const RATING_COLORS: Record<number, string> = {
@@ -45,6 +67,12 @@ const RATING_COLORS: Record<number, string> = {
   3: '#eab308',
   2: '#f97316',
   1: '#ef4444',
+};
+
+const SENTIMENT_COLORS = {
+  POSITIVE: '#22c55e',
+  NEUTRAL: '#94a3b8',
+  NEGATIVE: '#ef4444',
 };
 
 interface MetricsPanelProps {
@@ -130,10 +158,18 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
     );
   }
 
+  const sentimentData = data.sentiment_distribution
+    ? [
+        { name: 'Positivo', value: data.sentiment_distribution.POSITIVE || 0, color: SENTIMENT_COLORS.POSITIVE },
+        { name: 'Neutro', value: data.sentiment_distribution.NEUTRAL || 0, color: SENTIMENT_COLORS.NEUTRAL },
+        { name: 'Negativo', value: data.sentiment_distribution.NEGATIVE || 0, color: SENTIMENT_COLORS.NEGATIVE },
+      ].filter((item) => item.value > 0)
+    : [];
+
   return (
     <div className="w-full flex flex-col gap-6">
       {/* Filtro por producto */}
-      {data.available_products.length > 0 && (
+      {(data?.available_products?.length ?? 0) > 0 && (
         <ProductFilter
           products={data.available_products}
           selected={selectedProduct}
@@ -142,7 +178,7 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
         />
       )}
 
-      {/* KPIs */}
+      {/* KPIs Principales */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
           <p className="text-sm text-blue-600 font-semibold">Total Reseñas</p>
@@ -158,110 +194,135 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
         </div>
       </div>
 
-      {/* Gráfico de Tendencia Temporal (Eje X = Fecha, Eje Y = Calificación / Volumen) */}
-      {/* 👈 Modificamos la validación para usar data.timeseries */}
-      {data.timeseries && data.timeseries.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold text-gray-500 mb-3">
-            Evolución Temporal de Calificaciones
+      {/* Fila Dual: Sentimiento y Distribución por Estrellas */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Gráfico de Sentimiento VoC */}
+        <div className="border border-gray-100 rounded-lg p-4 bg-slate-50/50">
+          <h3 className="text-sm font-semibold text-gray-600 mb-2 flex items-center gap-1.5">
+            <ThumbsUp className="w-4 h-4 text-blue-500" />
+            Sentimiento General (VoC)
           </h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart
-              data={data.timeseries}
-              margin={{ top: 10, right: 30, left: 0, bottom: 5 }}
+          {sentimentData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie
+                  data={sentimentData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={45}
+                  outerRadius={75}
+                  paddingAngle={4}
+                  dataKey="value"
+                >
+                  {sentimentData.map((entry, index) => (
+                    <Cell key={`sent-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(val) => [`${val} opiniones`, 'Cantidad']} />
+                <Legend wrapperStyle={{ fontSize: '12px' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-xs text-gray-400 py-10 text-center">Sin datos de sentimiento</p>
+          )}
+        </div>
+
+        {/* Distribución por Estrellas */}
+        <div className="border border-gray-100 rounded-lg p-4 bg-slate-50/50">
+          <h3 className="text-sm font-semibold text-gray-600 mb-2">
+            Distribución de Calificaciones
+          </h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart
+              data={(data.distribution || []).map((d) => ({
+                name: `${d.rating} ★`,
+                cantidad: d.cantidad,
+                rating: d.rating,
+                fill: RATING_COLORS[d.rating],
+              }))}
+              layout="vertical"
+              margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
             >
+              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+              <XAxis type="number" hide allowDecimals={false} />
+              <YAxis dataKey="name" type="category" width={45} fontSize={12} tickLine={false} axisLine={false} />
+              <Tooltip cursor={{ fill: '#f8fafc' }} formatter={(val) => [`${val ?? 0} reseñas`, 'Cantidad']} />
+              <Bar dataKey="cantidad" radius={[0, 4, 4, 0]} barSize={22} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Tendencia Temporal */}
+      {data.timeseries && data.timeseries.length > 0 && (
+        <div className="border border-gray-100 rounded-lg p-4 bg-slate-50/50">
+          <h3 className="text-sm font-semibold text-gray-600 mb-3">
+            Evolución Temporal
+          </h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={data.timeseries} margin={{ top: 10, right: 20, left: -20, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis
-                dataKey="fecha" // 👈 Alineado al JSON de FastAPI
-                fontSize={12}
-                tickLine={false}
-                stroke="#64748b"
-              />
-              <YAxis
-                yAxisId="left"
-                domain={[1, 5]}
-                fontSize={12}
-                tickLine={false}
-                stroke="#22c55e"
-              />
-              <YAxis
-                yAxisId="right"
-                orientation="right"
-                fontSize={12}
-                tickLine={false}
-                stroke="#3b82f6"
-                allowDecimals={false}
-              />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#ffffff', borderRadius: '8px', borderColor: '#e2e8f0' }}
-                formatter={(value: any, name: any) => [
-                  name === 'Promedio' ? `${value} ★` : `${value} reseñas`,
-                  name
-                ]}
-              />
-              <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />
-              <Line
-                yAxisId="left"
-                type="monotone"
-                dataKey="promedio"
-                name="Promedio"
-                stroke="#22c55e"
-                strokeWidth={2}
-                dot={{ r: 4, fill: '#22c55e' }}
-                activeDot={{ r: 6 }}
-              />
-              <Line
-                yAxisId="right"
-                type="monotone"
-                dataKey="cantidad" // 👈 Alineado al JSON de FastAPI
-                name="Total Reseñas"
-                stroke="#3b82f6"
-                strokeWidth={2}
-                strokeDasharray="4 4"
-                dot={{ r: 4, fill: '#3b82f6' }}
-                activeDot={{ r: 6 }}
-              />
+              <XAxis dataKey="fecha" fontSize={11} tickLine={false} stroke="#64748b" />
+              <YAxis yAxisId="left" domain={[1, 5]} fontSize={11} tickLine={false} stroke="#22c55e" />
+              <YAxis yAxisId="right" orientation="right" fontSize={11} tickLine={false} stroke="#3b82f6" allowDecimals={false} />
+              <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderRadius: '8px' }} />
+              <Legend wrapperStyle={{ fontSize: '11px' }} />
+              <Line yAxisId="left" type="monotone" dataKey="promedio" name="Promedio" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
+              <Line yAxisId="right" type="monotone" dataKey="cantidad" name="Reseñas" stroke="#3b82f6" strokeWidth={2} strokeDasharray="4 4" dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
       )}
 
-      {/* Gráfico de Barras */}
-      <div>
-        <h3 className="text-sm font-semibold text-gray-500 mb-3">
-          Distribución de Calificaciones
-        </h3>
-        <ResponsiveContainer width="100%" height={220}>
-          <BarChart
-            data={data.distribution.map((d) => ({
-              name: `${d.rating} Estrella${d.rating !== 1 ? 's' : ''}`,
-              cantidad: d.cantidad,
-              rating: d.rating,
-            }))}
-            layout="vertical"
-            margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-            <XAxis type="number" hide allowDecimals={false} />
-            <YAxis
-              dataKey="name"
-              type="category"
-              width={90}
-              fontSize={12}
-              tickLine={false}
-              axisLine={false}
-            />
-            <Tooltip
-              cursor={{ fill: '#f8fafc' }}
-              formatter={(value) => [`${value ?? 0} reseñas`, 'Cantidad']}
-            />
-            <Bar dataKey="cantidad" radius={[0, 4, 4, 0]} barSize={28}>
-              {data.distribution.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={RATING_COLORS[entry.rating]} />
+      {/* Fila Dual: Categorías Destacadas y Nube de Aspect Tags */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Categorías VoC */}
+        <div className="border border-gray-100 rounded-lg p-4 bg-slate-50/50">
+          <h3 className="text-sm font-semibold text-gray-600 mb-3 flex items-center gap-1.5">
+            <MessageSquare className="w-4 h-4 text-purple-500" />
+            Top Categorías Mencionadas
+          </h3>
+          {data.top_categories && data.top_categories.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {data.top_categories.map((cat, idx) => (
+                <div key={idx} className="flex items-center justify-between text-xs bg-white p-2.5 rounded border border-gray-100">
+                  <span className="font-medium text-slate-700 capitalize">{cat.category}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-gray-400">{cat.count} menciones</span>
+                    <span className="font-semibold text-emerald-600">{cat.avg_rating} ★</span>
+                  </div>
+                </div>
               ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400 py-6 text-center">Sin datos de categorías</p>
+          )}
+        </div>
+
+        {/* Aspect Tags */}
+        <div className="border border-gray-100 rounded-lg p-4 bg-slate-50/50">
+          <h3 className="text-sm font-semibold text-gray-600 mb-3 flex items-center gap-1.5">
+            <Tag className="w-4 h-4 text-amber-500" />
+            Aspectos Clave (Aspect Tags)
+          </h3>
+          {data.top_aspect_tags && data.top_aspect_tags.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {data.top_aspect_tags.map((item, idx) => (
+                <span
+                  key={idx}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                >
+                  {item.tag}
+                  <span className="bg-amber-200 text-amber-900 rounded-full text-[10px] px-1.5 py-0.2">
+                    {item.count}
+                  </span>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400 py-6 text-center">Sin aspectos detectados</p>
+          )}
+        </div>
       </div>
     </div>
   );

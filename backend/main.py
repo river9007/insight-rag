@@ -1,10 +1,15 @@
 # Archivo: backend/main.py
+
 import pandas as pd
 import io
 import re
 import uuid
 import asyncio
 import unicodedata
+from typing import Optional
+from collections import Counter
+from sqlalchemy import select, func
+from voc import extract_voc_metadata_async
 from reranker import reranker_instance
 from typing import List, Optional, Tuple, Dict, Any
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
@@ -346,8 +351,8 @@ async def get_relevant_reviews(
     if product_id:
         stmt = stmt.where(models.Review.product_id == product_id)
         
-    # Corrección: escala dinámicamente según el 'limit' solicitado por el usuario
-    candidate_limit = max(limit * 2, 10)
+    # Pool de candidatos ampliado (30 a 50) para maximizar la efectividad del Cross-Encoder
+    candidate_limit = min(max(limit * 3, 30), 50)
     stmt = (
         stmt.order_by(models.Review.embedding.cosine_distance(query_vector))
         .limit(candidate_limit)
@@ -355,7 +360,11 @@ async def get_relevant_reviews(
     result = await db.execute(stmt)
     candidates = list(result.scalars().all())
 
-    # Re-ranking sobre la muestra real recuperada
+    # Retorno temprano si no hay resultados en BD
+    if not candidates:
+        return []
+
+    # Re-ranking asíncrono sobre la muestra ampliada
     reranked_reviews = await reranker_instance.rerank(
         query=query, 
         reviews=candidates, 
@@ -492,84 +501,210 @@ async def get_metrics(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    user_uuid = uuid.UUID(user.get("sub"))
+    import json
+    import re
+    
+    raw_user_id = user.get("sub")
+    user_uuid = uuid.UUID(raw_user_id)
 
-    base_filter = [
-        models.Review.chunk_index == 0,
-        models.Review.user_id == user_uuid
-    ]
+    # Filtro base por usuario y opcionalmente por producto
+    base_filter = [models.Review.user_id == user_uuid]
     if product_id:
         base_filter.append(models.Review.product_id == product_id)
 
-    total_stmt = select(func.count()).select_from(models.Review).where(*base_filter)
-    total = (await db.execute(total_stmt)).scalar() or 0
-
-    avg_stmt = select(func.avg(models.Review.rating)).where(*base_filter)
-    avg_raw = (await db.execute(avg_stmt)).scalar()
-    promedio = round(float(avg_raw), 1) if avg_raw is not None else 0.0
-
-    alertas_stmt = select(func.count()).select_from(models.Review).where(
-        *base_filter, models.Review.rating <= 2
+    # Productos disponibles para el selector
+    prod_stmt = (
+        select(func.distinct(models.Review.product_id))
+        .where(models.Review.user_id == user_uuid)
     )
-    alertas = (await db.execute(alertas_stmt)).scalar() or 0
+    prod_res = await db.execute(prod_stmt)
+    available_products = [p for p in prod_res.scalars().all() if p]
 
+    # Total de reseñas únicas
+    total_stmt = (
+        select(func.count(func.distinct(models.Review.review_group_id)))
+        .where(*base_filter)
+    )
+    total_res = await db.execute(total_stmt)
+    total_resenas = total_res.scalar() or 0
+
+    if total_resenas == 0:
+        return {
+            "total_resenas": 0,
+            "total_reviews": 0,
+            "promedio": 0.0,
+            "average_rating": 0.0,
+            "alertas": 0,
+            "distribution": [{"rating": r, "cantidad": 0} for r in range(1, 6)],
+            "timeseries": [],
+            "available_products": available_products,
+            "filtered_by": product_id,
+            "sentiment_distribution": {"POSITIVE": 0, "NEUTRAL": 0, "NEGATIVE": 0},
+            "top_categories": [],
+            "top_aspect_tags": []
+        }
+
+    # Promedio de calificación
+    avg_stmt = select(func.avg(models.Review.rating)).where(*base_filter)
+    avg_res = await db.execute(avg_stmt)
+    promedio = round(float(avg_res.scalar() or 0.0), 2)
+
+    # Alertas (1-2 estrellas)
+    alertas_stmt = (
+        select(func.count(func.distinct(models.Review.review_group_id)))
+        .where(*base_filter, models.Review.rating <= 2)
+    )
+    alertas_res = await db.execute(alertas_stmt)
+    alertas = alertas_res.scalar() or 0
+
+    # Distribución por estrellas (1 a 5)
     dist_stmt = (
-        select(models.Review.rating, func.count().label("cantidad"))
+        select(models.Review.rating, func.count(func.distinct(models.Review.review_group_id)))
         .where(*base_filter)
         .group_by(models.Review.rating)
     )
-    dist_result = await db.execute(dist_stmt)
-    dist_raw = {row.rating: row.cantidad for row in dist_result}
-
+    dist_res = await db.execute(dist_stmt)
+    dist_dict = dict(dist_res.all())
     distribution = [
-        {"rating": r, "cantidad": dist_raw.get(r, 0)}
-        for r in [5, 4, 3, 2, 1]
+        {"rating": r, "cantidad": dist_dict.get(r, 0)} for r in range(1, 6)
     ]
 
-    products_stmt = (
-        select(models.Review.product_id)
-        .where(
-            models.Review.chunk_index == 0,
-            models.Review.user_id == user_uuid
-        )
-        .distinct()
-        .order_by(models.Review.product_id)
-    )
-    products_result = await db.execute(products_stmt)
-    available_products = [row.product_id for row in products_result]
-
-    # --- NUEVO: CÁLCULO DE SERIE TEMPORAL (Evolución) ---
-    timeseries_stmt = (
+    # Serie temporal
+    ts_stmt = (
         select(
-            cast(models.Review.created_at, Date).label("fecha"),
-            func.avg(models.Review.rating).label("promedio_diario"),
-            func.count().label("cantidad")
+            func.date(models.Review.created_at).label("fecha"),
+            func.avg(models.Review.rating).label("promedio"),
+            func.count(func.distinct(models.Review.review_group_id)).label("cantidad")
         )
         .where(*base_filter)
-        .group_by(cast(models.Review.created_at, Date))
-        .order_by(cast(models.Review.created_at, Date))
+        .group_by(func.date(models.Review.created_at))
+        .order_by(func.date(models.Review.created_at).asc())
     )
-    
-    timeseries_result = await db.execute(timeseries_stmt)
-    
+    ts_res = await db.execute(ts_stmt)
     timeseries = [
         {
-            "fecha": row.fecha.isoformat() if row.fecha else "Desconocida",
-            "promedio": round(float(row.promedio_diario), 1) if row.promedio_diario else 0.0,
-            "cantidad": row.cantidad
+            "fecha": str(row.fecha) if row.fecha else "",
+            "promedio": round(float(row.promedio or 0), 2),
+            "cantidad": int(row.cantidad or 0)
         }
-        for row in timeseries_result
+        for row in ts_res.all()
     ]
-    # --- FIN NUEVO ---
+
+    # -------------------------------------------------------------------------
+    # 1. Métricas VoC: Sentimiento (Normalización robusta de Enum / String)
+    # -------------------------------------------------------------------------
+    sentiment_stmt = (
+        select(models.Review.sentiment, func.count(models.Review.id))
+        .where(*base_filter)
+        .group_by(models.Review.sentiment)
+    )
+    sentiment_res = await db.execute(sentiment_stmt)
+
+    sentiment_counts = {"POSITIVE": 0, "NEUTRAL": 0, "NEGATIVE": 0}
+    for sent, count in sentiment_res.all():
+        if sent is not None:
+            raw_val = getattr(sent, "value", sent)
+            # Extrae la parte final de la cadena (remueve prefijos como 'review_sentiment.')
+            val_str = str(raw_val).split(".")[-1].upper().strip()
+
+            if val_str in sentiment_counts:
+                sentiment_counts[val_str] += count
+            elif val_str.startswith("POS"):
+                sentiment_counts["POSITIVE"] += count
+            elif val_str.startswith("NEG"):
+                sentiment_counts["NEGATIVE"] += count
+            elif val_str.startswith("NEU"):
+                sentiment_counts["NEUTRAL"] += count
+
+    sentiment_distribution = sentiment_counts
+
+    # -------------------------------------------------------------------------
+    # 2. Métricas VoC: Categorías Top
+    # -------------------------------------------------------------------------
+    cat_stmt = (
+        select(
+            models.Review.category,
+            func.count(models.Review.id).label("count"),
+            func.avg(models.Review.rating).label("avg_rating")
+        )
+        .where(*base_filter)
+        .group_by(models.Review.category)
+        .order_by(func.count(models.Review.id).desc())
+        .limit(5)
+    )
+    cat_res = await db.execute(cat_stmt)
+    top_categories = []
+    for cat, count, avg_r in cat_res.all():
+        cat_name = str(cat).strip() if cat and str(cat).strip() != "None" else "General"
+        top_categories.append({
+            "category": cat_name,
+            "count": int(count or 0),
+            "avg_rating": round(float(avg_r or 0.0), 2)
+        })
+
+    # -------------------------------------------------------------------------
+    # 3. Métricas VoC: Aspect Tags (Parsea List, JSON String y Postgres Array {...})
+    # -------------------------------------------------------------------------
+    tags_stmt = select(models.Review.aspect_tags).where(*base_filter)
+    tags_res = await db.execute(tags_stmt)
+    tag_counter = Counter()
+
+    for raw_tags in tags_res.scalars().all():
+        if not raw_tags:
+            continue
+
+        # Caso A: Si viene como lista o tupla nativa de Python
+        if isinstance(raw_tags, (list, tuple)):
+            for t in raw_tags:
+                if t and isinstance(t, str):
+                    tag_counter[t.strip().lower()] += 1
+
+        # Caso B: Si viene como formato de texto
+        elif isinstance(raw_tags, str):
+            s = raw_tags.strip()
+            # B.1: Formato JSON '["tag1", "tag2"]'
+            if s.startswith('[') and s.endswith(']'):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, list):
+                        for t in parsed:
+                            if t and isinstance(t, str):
+                                tag_counter[t.strip().lower()] += 1
+                except Exception:
+                    pass
+            # B.2: Formato PostgreSQL Array literal '{"tag 1","tag 2"}' o '{tag1,tag2}'
+            elif s.startswith('{') and s.endswith('}'):
+                content = s[1:-1].strip()
+                if content:
+                    items = re.findall(r'"([^"]*)"|([^,]+)', content)
+                    for item in items:
+                        t = item[0] if item[0] else item[1]
+                        if t and t.strip():
+                            tag_counter[t.strip().lower()] += 1
+            # B.3: Cadena simple separada por comas "tag1, tag2"
+            else:
+                for t in s.split(','):
+                    if t and t.strip():
+                        tag_counter[t.strip().lower()] += 1
+
+    top_aspect_tags = [
+        {"tag": tag, "count": count}
+        for tag, count in tag_counter.most_common(10)
+    ]
 
     return {
-        "total_resenas": total,
+        "total_resenas": total_resenas,
+        "total_reviews": total_resenas,
         "promedio": promedio,
+        "average_rating": promedio,
         "alertas": alertas,
         "distribution": distribution,
+        "timeseries": timeseries,
         "available_products": available_products,
         "filtered_by": product_id,
-        "timeseries": timeseries, # 👈 Nueva propiedad expuesta a la API
+        "sentiment_distribution": sentiment_distribution,
+        "top_categories": top_categories,
+        "top_aspect_tags": top_aspect_tags
     }
 
 # 5. ENDPOINT: Ingesta de Documentos
@@ -635,16 +770,29 @@ async def ingest_document(
                 )
             )
 
-        # chunks_to_insert: (product_id, product_name, rating, texto, chunk_index, review_group_id)
-        chunks_to_insert: list[tuple[str, str, int, str, int, str]] = []
+        # ── INICIO DE LA PARTE REEMPLAZADA (VOC + CHUNKING + EMBEDDINGS) ─────
+        sem = asyncio.Semaphore(5)
 
-        for review in parsed_reviews:
+        async def process_voc_for_review(rev: ParsedReview):
+            async with sem:
+                meta = await extract_voc_metadata_async(rev.text)
+                if rev.category and rev.category != "General":
+                    meta.category = rev.category
+                return meta
+
+        voc_results = await asyncio.gather(*[process_voc_for_review(r) for r in parsed_reviews])
+        voc_map = {idx: meta for idx, meta in enumerate(voc_results)}
+
+        # chunks_to_insert: (product_id, product_name, rating, texto, chunk_index, group_id, r_idx)
+        chunks_to_insert: list[tuple[str, str, int, str, int, str, int]] = []
+
+        for r_idx, review in enumerate(parsed_reviews):
             group_id = str(uuid.uuid4())
             base_header = f"Producto: {review.product_name} ({review.product_id}). Reseña"
             simple_text = f"{base_header}: {review.text}"
 
             if len(simple_text) <= MAX_REVIEW_CHUNK_CHARS:
-                chunks_to_insert.append((review.product_id, review.product_name, review.rating, simple_text, 0, group_id))
+                chunks_to_insert.append((review.product_id, review.product_name, review.rating, simple_text, 0, group_id, r_idx))
                 continue
 
             available_body_size = max(
@@ -661,13 +809,11 @@ async def ingest_document(
 
             for idx, sub_text in enumerate(sub_texts):
                 enriched_sub_chunk = f"{base_header} (parte {idx + 1}/{total_parts}): {sub_text}"
-                chunks_to_insert.append((review.product_id, review.product_name, review.rating, enriched_sub_chunk, idx, group_id))
+                chunks_to_insert.append((review.product_id, review.product_name, review.rating, enriched_sub_chunk, idx, group_id, r_idx))
 
         raw_user_id = user.get("sub")
         user_uuid = uuid.UUID(raw_user_id)
 
-        # Procesamiento en LOTE (Batch) de embeddings.
-        # Ejecuta una única llamada C++ optimizada a nivel de motor ONNX.
         texts_to_embed = [item[3] for item in chunks_to_insert]
         vectors = await asyncio.to_thread(get_embeddings_batch, texts_to_embed)
 
@@ -681,12 +827,16 @@ async def ingest_document(
                 embedding=vector,
                 chunk_index=chunk_index,
                 review_group_id=group_id,
+                sentiment=models.SentimentEnum(voc_map[r_idx].sentiment),
+                category=voc_map[r_idx].category,
+                aspect_tags=voc_map[r_idx].aspect_tags
             )
-            for (product_id, product_name, rating, text, chunk_index, group_id), vector in zip(chunks_to_insert, vectors)
+            for (product_id, product_name, rating, text, chunk_index, group_id, r_idx), vector in zip(chunks_to_insert, vectors)
         ]
 
         db.add_all(new_reviews)
         await db.commit()
+        # ── FIN DE LA PARTE REEMPLAZADA ──────────────────────────────────────
 
         return {
             "status": "success",
