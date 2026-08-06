@@ -1,4 +1,3 @@
-# Archivo: backend/embeddings.py
 from fastembed import TextEmbedding
 
 # BAAI/bge-small-en-v1.5:
@@ -15,3 +14,13 @@ def get_embedding(text: str) -> list[float]:
     """
     embeddings = list(_model.embed([text]))
     return embeddings[0].tolist()
+
+def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
+    """
+    Devuelve una lista de vectores de 384 dimensiones procesados en lote (batch).
+    Aprovecha la aceleración por matriz C++ de FastEmbed sin bloquear el loop.
+    """
+    if not texts:
+        return []
+    embeddings = _model.embed(texts)
+    return [e.tolist() for e in embeddings]

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from typing import List
-import models
+from models import Review
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class RAGReRanker:
         except Exception as e:
             logger.error(f"⚠️ Error al cargar ONNX: {e}. Activando modo passthrough.")
 
-    def _sync_rerank(self, query: str, reviews: List[models.Review], top_k: int) -> List[models.Review]:
+    def _sync_rerank(self, query: str, reviews: List[Review], top_k: int) -> List[Review]:
         if not reviews:
             return []
 
@@ -53,14 +53,18 @@ class RAGReRanker:
 
         try:
             queries = [query] * len(reviews)
-            texts = [r.review_text for r in reviews]
+            # Enriquecemos el texto con el nombre del producto si existe para mejorar el score del Cross-Encoder
+            texts = [
+                f"Producto: {r.product_name} | {r.review_text}" if getattr(r, "product_name", None) else r.review_text
+                for r in reviews
+            ]
 
             inputs = self.tokenizer(
                 queries,
                 texts,
                 padding=True,
                 truncation=True,
-                max_length=64,
+                max_length=256,  # Ampliado a 256 para evitar truncado prematuro de reseñas
                 return_tensors="np"
             )
 
@@ -74,7 +78,7 @@ class RAGReRanker:
             logger.error(f"Error durante re-ranking: {e}. Retornando resultados vectoriales.")
             return reviews[:top_k]
 
-    async def rerank(self, query: str, reviews: List[models.Review], top_k: int) -> List[models.Review]:
+    async def rerank(self, query: str, reviews: List[Review], top_k: int) -> List[Review]:
         if not self.enabled:
             return reviews[:top_k]
         return await asyncio.to_thread(self._sync_rerank, query, reviews, top_k)

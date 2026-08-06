@@ -1,3 +1,4 @@
+# Archivo: backend/main.py
 import pandas as pd
 import io
 import re
@@ -14,7 +15,7 @@ from sqlalchemy import select, func, delete, cast, Date
 from pydantic import BaseModel, Field
 from database import engine, Base, get_db
 import models
-from embeddings import get_embedding
+from embeddings import get_embedding, get_embeddings_batch
 from fastapi.responses import StreamingResponse
 from llm import generate_insight, stream_insight, rewrite_query
 from langchain_core.messages import HumanMessage, AIMessage
@@ -344,10 +345,8 @@ async def get_relevant_reviews(
     if product_id:
         stmt = stmt.where(models.Review.product_id == product_id)
         
-    # 💡 OPTIMIZACIÓN TECH LEAD: 
-    # En lugar de traer 15+ candidatos para evaluar en CPU, traemos máximo 5 candidatos iniciales.
-    # El modelo ONNX responderá en ~800-900 ms en lugar de 2.8 segundos.
-    candidate_limit = 5
+    # Corrección: escala dinámicamente según el 'limit' solicitado por el usuario
+    candidate_limit = max(limit * 2, 10)
     stmt = (
         stmt.order_by(models.Review.embedding.cosine_distance(query_vector))
         .limit(candidate_limit)
@@ -355,7 +354,7 @@ async def get_relevant_reviews(
     result = await db.execute(stmt)
     candidates = list(result.scalars().all())
 
-    # 2. RE-RANKING: Reordenamos ese Top-5 para seleccionar los 'limit' finales para el LLM
+    # Re-ranking sobre la muestra real recuperada
     reranked_reviews = await reranker_instance.rerank(
         query=query, 
         reviews=candidates, 
@@ -666,18 +665,13 @@ async def ingest_document(
         raw_user_id = user.get("sub")
         user_uuid = uuid.UUID(raw_user_id)
 
-        # Procesamiento SECUENCIAL de embeddings (una llamada a la vez).
-        # Se revirtió el procesamiento concurrente (asyncio.gather sin límite)
-        # que había reintroducido otra sesión de trabajo — la decisión de
-        # mantenerlo secuencial ya se había tomado explícitamente antes por
-        # no poder confirmar sin pruebas reales que el modelo ONNX
-        # compartido (fastembed) sea seguro bajo llamadas concurrentes desde
-        # múltiples hilos.
-        new_reviews = []
-        for product_id, product_name, rating, text, chunk_index, group_id in chunks_to_insert:
-            vector = await asyncio.to_thread(get_embedding, text)
+        # Procesamiento en LOTE (Batch) de embeddings.
+        # Ejecuta una única llamada C++ optimizada a nivel de motor ONNX.
+        texts_to_embed = [item[3] for item in chunks_to_insert]
+        vectors = await asyncio.to_thread(get_embeddings_batch, texts_to_embed)
 
-            review_entry = models.Review(
+        new_reviews = [
+            models.Review(
                 user_id=user_uuid,
                 product_id=product_id,
                 product_name=product_name,
@@ -687,7 +681,8 @@ async def ingest_document(
                 chunk_index=chunk_index,
                 review_group_id=group_id,
             )
-            new_reviews.append(review_entry)
+            for (product_id, product_name, rating, text, chunk_index, group_id), vector in zip(chunks_to_insert, vectors)
+        ]
 
         db.add_all(new_reviews)
         await db.commit()

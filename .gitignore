@@ -35,3 +35,9 @@ onnx_reranker_int8/
 export_reranker.py
 backend/export_reranker.py
 estructura.txt
+
+# ── otros archivos ─────────────────────────────────────────────────────
+backend.md
+frontend.md
+raiz.md
+database-supabase.md
