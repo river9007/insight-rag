@@ -472,9 +472,18 @@ async def analyze_reviews_stream(
             chat_history=langchain_history,
             sources=sources_data
         ):
-            yield str(chunk)
+            yield chunk
 
-    return StreamingResponse(event_generator(), media_type="text/plain")
+    # CONFIGURACIÓN PROFESIONAL DE CABECERAS PARA STREAMING HTTP
+    return StreamingResponse(
+        event_generator(), 
+        media_type="text/plain", 
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Content-Type-Options": "nosniff"
+        }
+    )
 
 # 4. ENDPOINT: Métricas Agregadas
 @app.get("/metrics")

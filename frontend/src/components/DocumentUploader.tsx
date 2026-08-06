@@ -1,7 +1,7 @@
 // Archivo: components/DocumentUploader.tsx
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UploadCloud, AlertTriangle, CheckCircle, FileText, Download, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 
@@ -27,10 +27,44 @@ interface DocumentUploaderProps {
 export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderProps) {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [progress, setProgress] = useState<number>(0);
+  const [stageText, setStageText] = useState<string>('');
   const [result, setResult] = useState<IngestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
+
+  // Simulación dinámica del avance mientras la petición asíncrona está ejecutándose
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (loading) {
+      setProgress(15);
+      setStageText('Leyendo archivo...');
+      
+      timer = setInterval(() => {
+        setProgress((prev) => {
+          if (prev < 45) {
+            setStageText('Procesando contenido...');
+            return prev + 10;
+          }
+          if (prev < 75) {
+            setStageText('Generando vectores de conocimiento...');
+            return prev + 5;
+          }
+          if (prev < 90) {
+            setStageText('Guardando en Supabase...');
+            return prev + 2;
+          }
+          return prev;
+        });
+      }, 350);
+    } else {
+      setProgress(0);
+      setStageText('');
+    }
+
+    return () => clearInterval(timer);
+  }, [loading]);
 
   // Función para generar y descargar la plantilla CSV de referencia
   const downloadTemplate = () => {
@@ -121,6 +155,8 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
         throw new Error(data.detail || 'Ocurrió un error al procesar el archivo en el servidor.');
       }
 
+      setProgress(100);
+      setStageText('¡Completado!');
       setResult(data);
       if (onUploadSuccess) {
         onUploadSuccess();
@@ -133,13 +169,13 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
   };
 
   return (
-    <div className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
+    <div className="w-full bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">Cargar Documento de Feedback</h2>
+        <h2 className="text-lg font-bold text-slate-800">Cargar Documento de Feedback</h2>
         
         <button
           onClick={downloadTemplate}
-          className="flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium transition-colors"
+          className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors"
           type="button"
         >
           <Download className="w-3.5 h-3.5" />
@@ -154,8 +190,8 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
         onDrop={handleDrop}
         className={`border-2 border-dashed rounded-xl p-6 text-center transition-all ${
           isDragging
-            ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/20 scale-[1.005]'
-            : 'border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30 hover:border-indigo-400'
+            ? 'border-indigo-500 bg-indigo-50/50 scale-[1.005]'
+            : 'border-slate-300 bg-slate-50/50 hover:border-indigo-400'
         }`}
       >
         <input
@@ -172,7 +208,7 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
           ) : (
             <UploadCloud className={`w-8 h-8 mb-2 transition-colors ${isDragging ? 'text-indigo-600' : 'text-slate-400'}`} />
           )}
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+          <span className="text-sm font-medium text-slate-700">
             {file ? file.name : isDragging ? '¡Suelta el archivo aquí!' : 'Haz clic para seleccionar o arrastra un archivo'}
           </span>
           <span className="text-xs text-slate-500 mt-1">
@@ -181,32 +217,39 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
         </label>
       </div>
 
+      {/* Indicador de Progreso Visual */}
+      {loading && (
+        <div className="mt-4 space-y-1.5">
+          <div className="flex justify-between text-xs text-slate-600 font-medium">
+            <span>{stageText}</span>
+            <span>{progress}%</span>
+          </div>
+          <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+            <div
+              className="bg-indigo-600 h-full transition-all duration-300 ease-out"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Accionable de Procesamiento */}
-      {file && (
+      {file && !loading && (
         <button
           onClick={handleUpload}
           disabled={loading}
           className="w-full mt-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2.5 px-4 rounded-xl transition-colors disabled:opacity-50 flex justify-center items-center gap-2 text-sm"
         >
-          {loading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Procesando y Vectorizando...</span>
-            </>
-          ) : (
-            <>
-              <FileText className="w-4 h-4" />
-              Procesar Archivo
-            </>
-          )}
+          <FileText className="w-4 h-4" />
+          Procesar Archivo
         </button>
       )}
 
       {/* Notificación de Error */}
       {error && (
-        <div className="mt-4 p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-red-700">{error}</p>
         </div>
       )}
 
@@ -214,14 +257,14 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
       {result && (
         <div className="mt-4 space-y-3">
           {result.filas_omitidas > 0 ? (
-            <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl">
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
               <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
                 <div className="flex-1">
-                  <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                  <h4 className="text-sm font-semibold text-amber-800">
                     Proceso completado con advertencias
                   </h4>
-                  <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                  <p className="text-xs text-amber-700 mt-1">
                     Se importaron <strong>{result.resenas_importadas ?? result.resenas_detectadas ?? 0}</strong> reseña(s) ({result.chunks_creados} vectores). 
                     Se omitieron <strong>{result.filas_omitidas}</strong> fila(s) con formato no válido.
                   </p>
@@ -230,14 +273,14 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
                     <>
                       <button
                         onClick={() => setShowDetails(!showDetails)}
-                        className="mt-2 text-xs font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-1 hover:underline"
+                        className="mt-2 text-xs font-semibold text-amber-900 flex items-center gap-1 hover:underline"
                       >
                         {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                         {showDetails ? 'Ocultar detalles' : 'Ver filas omitidas'}
                       </button>
 
                       {showDetails && (
-                        <ul className="mt-2 space-y-1 text-xs text-amber-900 dark:text-amber-200 bg-amber-100/60 dark:bg-amber-900/40 p-2.5 rounded-lg border border-amber-200 dark:border-amber-800">
+                        <ul className="mt-2 space-y-1 text-xs text-amber-900 bg-amber-100/60 p-2.5 rounded-lg border border-amber-200">
                           {result.detalle_filas_omitidas.map((item, idx) => (
                             <li key={idx}>
                               • <strong>Fila {item.fila}:</strong> {item.motivo}
@@ -251,13 +294,13 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
               </div>
             </div>
           ) : (
-            <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-start gap-3">
-              <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-3">
+              <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
               <div>
-                <h4 className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">
+                <h4 className="text-sm font-semibold text-emerald-800">
                   ¡Ingesta completada con éxito!
                 </h4>
-                <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-1">
+                <p className="text-xs text-emerald-700 mt-1">
                   Se procesaron <strong>{result.resenas_importadas ?? result.resenas_detectadas ?? 0}</strong> reseña(s) correctamente y se generaron <strong>{result.chunks_creados}</strong> vectores de conocimiento.
                 </p>
               </div>

@@ -1,6 +1,7 @@
 # Archivo: backend/llm.py
 import os
 import json
+import asyncio
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -87,6 +88,7 @@ async def stream_insight(context: str, question: str, chat_history: list = [], s
     }):
         if chunk.content:
             yield chunk.content
+            # await asyncio.sleep(0.02) # 👈 2. Retraso artificial de 20 milisegundos por token
             
     if sources:
         sources_json = json.dumps(sources)
