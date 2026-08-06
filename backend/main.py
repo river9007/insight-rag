@@ -260,6 +260,7 @@ class AnalyzeRequest(BaseModel):
     product_id: Optional[str] = Field(default=None, description="ID del producto para filtrar contexto")
 
 @app.get("/")
+@app.head("/")
 async def root():
     return {"status": "ok", "message": "InsightRAG Backend corriendo"}
 
