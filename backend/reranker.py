@@ -6,8 +6,14 @@ from models import Review
 
 logger = logging.getLogger(__name__)
 
+# Definir la raíz del proyecto (un nivel arriba de backend/)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_MODEL_PATH = os.path.join(BASE_DIR, "onnx_reranker_fp32")
+
+# Ruta por defecto a la raíz del repositorio, con soporte para variable de entorno
+DEFAULT_MODEL_PATH = os.getenv(
+    "ONNX_MODEL_PATH", 
+    os.path.join(BASE_DIR, "onnx_reranker_fp32")
+)
 
 # Verificación segura de librerías ONNX
 try:
@@ -47,13 +53,11 @@ class RAGReRanker:
         if not reviews:
             return []
 
-        # Passthrough directo de la búsqueda vectorial si ONNX no está disponible
         if not self.enabled:
             return reviews[:top_k]
 
         try:
             queries = [query] * len(reviews)
-            # Enriquecemos el texto con el nombre del producto si existe para mejorar el score del Cross-Encoder
             texts = [
                 f"Producto: {r.product_name} | {r.review_text}" if getattr(r, "product_name", None) else r.review_text
                 for r in reviews
@@ -64,7 +68,7 @@ class RAGReRanker:
                 texts,
                 padding=True,
                 truncation=True,
-                max_length=256,  # Ampliado a 256 para evitar truncado prematuro de reseñas
+                max_length=256,
                 return_tensors="np"
             )
 

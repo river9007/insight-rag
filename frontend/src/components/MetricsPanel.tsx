@@ -15,7 +15,6 @@ import {
   Legend,
   PieChart,
   Pie,
-  Cell,
 } from 'recharts';
 import { Loader2, Tag, ThumbsUp, MessageSquare, AlertTriangle } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
@@ -86,6 +85,11 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
   const [data, setData] = useState<MetricsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   const fetchMetrics = useCallback(async () => {
     setIsLoading(true);
@@ -129,11 +133,20 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
     fetchMetrics();
   }, [fetchMetrics, refreshTrigger]);
 
+  if (!isMounted) {
+    return (
+      <div className="flex items-center justify-center h-40 gap-2 text-gray-400">
+        <Loader2 className="w-5 h-5 animate-spin" />
+        <span className="text-sm font-medium">Iniciando panel...</span>
+      </div>
+    );
+  }
+
   if (isLoading && !data) {
     return (
       <div className="flex items-center justify-center h-40 gap-2 text-gray-400">
         <Loader2 className="w-5 h-5 animate-spin" />
-        <span className="text-sm">Cargando métricas...</span>
+        <span className="text-sm font-medium">Cargando métricas...</span>
       </div>
     );
   }
@@ -198,11 +211,18 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
 
   const sentimentData = data.sentiment_distribution
     ? [
-        { name: 'Positivo', value: data.sentiment_distribution.POSITIVE || 0, color: SENTIMENT_COLORS.POSITIVE },
-        { name: 'Neutro', value: data.sentiment_distribution.NEUTRAL || 0, color: SENTIMENT_COLORS.NEUTRAL },
-        { name: 'Negativo', value: data.sentiment_distribution.NEGATIVE || 0, color: SENTIMENT_COLORS.NEGATIVE },
+        { name: 'Positivo', value: data.sentiment_distribution.POSITIVE || 0, fill: SENTIMENT_COLORS.POSITIVE },
+        { name: 'Neutro', value: data.sentiment_distribution.NEUTRAL || 0, fill: SENTIMENT_COLORS.NEUTRAL },
+        { name: 'Negativo', value: data.sentiment_distribution.NEGATIVE || 0, fill: SENTIMENT_COLORS.NEGATIVE },
       ].filter((item) => item.value > 0)
     : [];
+
+  const barChartData = (data.distribution || []).map((d) => ({
+    name: `${d.rating} ★`,
+    cantidad: d.cantidad,
+    rating: d.rating,
+    fill: RATING_COLORS[d.rating] || '#3b82f6',
+  }));
 
   return (
     <div className="w-full flex flex-col gap-6">
@@ -281,11 +301,7 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
                   outerRadius={75}
                   paddingAngle={4}
                   dataKey="value"
-                >
-                  {sentimentData.map((entry, index) => (
-                    <Cell key={`sent-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
+                />
                 <Tooltip formatter={(val) => [`${val} opiniones`, 'Cantidad']} />
                 <Legend wrapperStyle={{ fontSize: '12px' }} />
               </PieChart>
@@ -302,12 +318,7 @@ export default function MetricsPanel({ refreshTrigger = 0 }: MetricsPanelProps) 
           </h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart
-              data={(data.distribution || []).map((d) => ({
-                name: `${d.rating} ★`,
-                cantidad: d.cantidad,
-                rating: d.rating,
-                fill: RATING_COLORS[d.rating],
-              }))}
+              data={barChartData}
               layout="vertical"
               margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
             >

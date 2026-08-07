@@ -1,3 +1,4 @@
+# Archivo: backend/embeddings.py
 from fastembed import TextEmbedding
 
 # BAAI/bge-small-en-v1.5:

@@ -1,44 +1,29 @@
-# ── Secretos y entorno ─────────────────────────────────────────────────────────
-.env
-.env.local
-.env.production
+# ── Secretos y entorno (Aplica a raíz, backend y frontend) ───────────────────
+**/.env*
+client_secret*.json
 
 # ── Python ─────────────────────────────────────────────────────────────────────
 venv/
-__pycache__/
+.venv/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
 
-# ── Datos locales del backend (no van a producción) ────────────────────────────
-backend/datos.json
-
-# ── Credenciales de Google (NUNCA deben subirse) ───────────────────────────────
-client_secret*.json
-
-# ── Next.js ────────────────────────────────────────────────────────────────────
+# ── Node & Next.js ─────────────────────────────────────────────────────────────
+**/node_modules/
 .next/
-frontend/.next/
+**/frontend/.next/
 
-# ── Node ───────────────────────────────────────────────────────────────────────
-node_modules/
-
-# ── Sistema operativo ──────────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-
-# ── Modelos pesados ONNX y scripts temporales ─────────────────────────────────
+# ── Datos y Modelos pesados (No subir a Git) ──────────────────────────────────
+backend/datos.json
 onnx_reranker_fp32/
 onnx_reranker_int8/
 *.onnx
-export_reranker.py
-backend/export_reranker.py
-estructura.txt
 
-# ── otros archivos ─────────────────────────────────────────────────────
-backend.md
-frontend.md
-raiz.md
-database-supabase.md
+# ── Sistema operativo y temporales ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+estructura.txt
 omitidos/
